@@ -85,11 +85,6 @@ RUN set -eux; \
     done
 ENV PATH="/root/.bun/bin:${PATH}"
 
-# Install CodexBar CLI (model-usage skill)
-RUN curl -fsSL https://github.com/anthropics/codexbar/releases/download/v0.18.0-beta.2/codexbar-linux-x86_64.tar.gz \
-    | tar -xzf - -C /usr/local/bin codexbar && \
-    chmod +x /usr/local/bin/codexbar
-
 RUN corepack enable
 
 WORKDIR /app
