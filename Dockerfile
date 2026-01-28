@@ -12,9 +12,18 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
-# Ensure node user exists (NodeSource nodejs package may already create one)
-# If not, create with UID/GID 1000 to match official node image
-RUN id node 2>/dev/null || (groupadd -g 1000 node 2>/dev/null || true && useradd -u 1000 -g 1000 -m -s /bin/bash node)
+# Ensure node user exists with the right name
+# NodeSource creates a user with UID 1000 that may not be named "node"
+RUN if ! id node 2>/dev/null; then \
+      existing_user=$(getent passwd 1000 | cut -d: -f1); \
+      if [ -n "$existing_user" ]; then \
+        usermod -l node -d /home/node -m "$existing_user" 2>/dev/null || true; \
+        groupmod -n node "$(getent group 1000 | cut -d: -f1)" 2>/dev/null || true; \
+      else \
+        groupadd -g 1000 node 2>/dev/null || true; \
+        useradd -u 1000 -g 1000 -m -s /bin/bash node; \
+      fi; \
+    fi
 
 # Create Homebrew directory and give ownership to node user
 RUN mkdir -p /home/linuxbrew/.linuxbrew && \
