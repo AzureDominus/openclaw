@@ -13,8 +13,8 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
 # Create node user if it doesn't exist (NodeSource may create it)
-RUN getent group node || groupadd --gid 1000 node && \
-    id -u node &>/dev/null || useradd --uid 1000 --gid node --shell /bin/bash --create-home node
+RUN if ! getent group node >/dev/null; then groupadd --gid 1000 node; fi && \
+    if ! id -u node >/dev/null 2>&1; then useradd --uid 1000 --gid node --shell /bin/bash --create-home node; fi
 
 # Create Homebrew directory and give ownership to node user
 RUN mkdir -p /home/linuxbrew/.linuxbrew && \
