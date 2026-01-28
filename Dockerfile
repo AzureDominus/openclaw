@@ -54,6 +54,15 @@ ENV NODE_ENV=production
 # Security hardening: Run as non-root user
 # The node:22-bookworm image includes a 'node' user (uid 1000)
 # This reduces the attack surface by preventing container escape via root privileges
+
+# Configure npm to use a user-writable global prefix for skill installs
+# This allows the node user to install global npm packages without root
+RUN mkdir -p /home/node/.npm-global && \
+    chown -R node:node /home/node/.npm-global && \
+    npm config set prefix /home/node/.npm-global --global
+ENV PATH="/home/node/.npm-global/bin:${PATH}"
+ENV NPM_CONFIG_PREFIX="/home/node/.npm-global"
+
 USER node
 
 # Start gateway server with default config.
