@@ -1,0 +1,20 @@
+# Synology NAS-specific volume mounts
+# This file is auto-merged with docker-compose.yml
+services:
+  moltbot-gateway:
+    volumes:
+      # SSH keys for git push (read-only)
+      - /volume1/docker/Projects/MoltBot/ssh-keys:/home/node/.ssh:ro
+      # Git config (read-only)
+      - /var/services/homes/Chadd/.gitconfig:/home/node/.gitconfig:ro
+      # Brave browser profile data (persistent)
+      - /volume1/docker/Projects/MoltBot/brave-data:/home/node/.config/BraveSoftware
+      # Downloads folder (persistent)
+      - /volume1/docker/Projects/MoltBot/downloads:/home/node/Downloads
+
+  moltbot-cli:
+    volumes:
+      # SSH keys for git push (read-only)
+      - /volume1/docker/Projects/MoltBot/ssh-keys:/home/node/.ssh:ro
+      # Git config (read-only)
+      - /var/services/homes/Chadd/.gitconfig:/home/node/.gitconfig:ro
