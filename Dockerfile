@@ -1,16 +1,19 @@
 FROM ubuntu:24.04
 
-# Install Node.js 22 and system dependencies for Homebrew
+# Install Node.js 22, Brave browser, and system dependencies
 # libxml2 required by CodexBar CLI (model-usage skill)
 # openssh-client required for git push over SSH
+# nano for in-container editing
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      build-essential procps curl file git ca-certificates gnupg unzip libxml2 openssh-client && \
+      build-essential procps curl file git ca-certificates gnupg unzip libxml2 openssh-client nano && \
     mkdir -p /etc/apt/keyrings && \
     curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg && \
     echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" > /etc/apt/sources.list.d/nodesource.list && \
+    curl -fsSLo /usr/share/keyrings/brave-browser-archive-keyring.gpg https://brave-browser-apt-release.s3.brave.com/brave-browser-archive-keyring.gpg && \
+    echo "deb [signed-by=/usr/share/keyrings/brave-browser-archive-keyring.gpg] https://brave-browser-apt-release.s3.brave.com/ stable main" > /etc/apt/sources.list.d/brave-browser-release.list && \
     apt-get update && \
-    DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs brave-browser && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
