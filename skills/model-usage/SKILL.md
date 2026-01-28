@@ -28,7 +28,7 @@ metadata:
 
 Get per-model usage cost from CodexBar's local cost logs. Supports "current model" (most recent daily entry) or "all models" summaries for Codex or Claude.
 
-TODO: add Linux CLI support guidance once CodexBar CLI install path is documented for Linux.
+**Linux users:** The CodexBar CLI is available for Linux from [GitHub releases](https://github.com/steipete/CodexBar/releases) (download `CodexBarCLI-v<version>-linux-x86_64.tar.gz` or `linux-aarch64`). Extract and place `codexbar` in your PATH. Automated install is not yet supported.
 
 ## Quick start
 
