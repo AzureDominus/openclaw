@@ -39,10 +39,11 @@ RUN mkdir -p /out && \
 # ── Stage 2: Build ──────────────────────────────────────────────
 FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS build
 
-# Install system dependencies for Homebrew
+# Install system dependencies for Homebrew.
+# libxml2 is required by CodexBar CLI (model-usage skill).
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      build-essential procps curl file git unzip && \
+      build-essential procps curl file git unzip libxml2 && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
