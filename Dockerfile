@@ -1,11 +1,20 @@
-FROM node:22-bookworm
+FROM ubuntu:24.04
 
-# Install system dependencies for Homebrew
+# Install Node.js 22 and system dependencies for Homebrew
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      build-essential procps curl file git && \
+      build-essential procps curl file git ca-certificates gnupg && \
+    mkdir -p /etc/apt/keyrings && \
+    curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg && \
+    echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" > /etc/apt/sources.list.d/nodesource.list && \
+    apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
+
+# Create node user (matches the official node image UID/GID)
+RUN groupadd --gid 1000 node && \
+    useradd --uid 1000 --gid node --shell /bin/bash --create-home node
 
 # Create Homebrew directory and give ownership to node user
 RUN mkdir -p /home/linuxbrew/.linuxbrew && \
