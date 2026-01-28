@@ -163,7 +163,7 @@ runcmd:
 
   # --- Tailscale ---
   - curl -fsSL https://tailscale.com/install.sh | sh
-  - tailscale up --ssh --authkey=YOUR_TAILSCALE_AUTH_KEY --hostname=moltbot-vps
+  - tailscale up --ssh --authkey=YOUR_TAILSCALE_AUTH_KEY --hostname=timmiy-hetzner-vps
 
   # --- UFW (block SSH from internet, allow Tailscale) ---
   - ufw default deny incoming
@@ -179,6 +179,10 @@ runcmd:
   # --- Setup timmy's environment ---
   - mkdir -p /home/timmy/.npm-global /home/timmy/.clawdbot /home/timmy/.bashrc.d /home/timmy/.ssh
   - chown -R timmy:timmy /home/timmy
+
+  # --- Set password for Hetzner console access (prompted to change on first login) ---
+  - echo 'timmy:changeme123' | chpasswd
+  - chage -d 0 timmy
 
   # --- Source bashrc.d in bashrc ---
   - echo 'for f in ~/.bashrc.d/*.sh; do [ -r "$f" ] && . "$f"; done' >> /home/timmy/.bashrc
