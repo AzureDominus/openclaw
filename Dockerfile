@@ -47,7 +47,7 @@ ARG OPENCLAW_BUNDLED_PLUGIN_DIR
 # libxml2 is required by CodexBar CLI (model-usage skill).
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      build-essential procps curl file git unzip libxml2 && \
+      build-essential procps curl file git unzip libxml2 openssh-client && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
