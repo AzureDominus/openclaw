@@ -42,7 +42,7 @@ FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS build
 # Install system dependencies for Homebrew
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      build-essential procps curl file git && \
+      build-essential procps curl file git unzip && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
