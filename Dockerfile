@@ -8,6 +8,10 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
+# Install CodexBar CLI for model-usage skill (usage tracking)
+# Note: Uses CodexBarCLI from steipete/CodexBar releases
+RUN curl -fsSL https://github.com/steipete/CodexBar/releases/download/v0.18.0-beta.2/CodexBarCLI-v0.18.0-beta.2-linux-x86_64.tar.gz \
+    | tar -xzf - -C /usr/local/bin && chmod +x /usr/local/bin/codexbar
 # Create Homebrew directory and give ownership to node user
 RUN mkdir -p /home/linuxbrew/.linuxbrew && \
     chown -R node:node /home/linuxbrew
@@ -23,11 +27,6 @@ USER root
 # Install Bun (required for build scripts)
 RUN curl -fsSL https://bun.sh/install | bash
 ENV PATH="/root/.bun/bin:${PATH}"
-
-# Install CodexBar CLI (model-usage skill)
-RUN curl -fsSL https://github.com/anthropics/codexbar/releases/download/v0.18.0-beta.2/codexbar-linux-x86_64.tar.gz \
-    | tar -xzf - -C /usr/local/bin codexbar && \
-    chmod +x /usr/local/bin/codexbar
 
 RUN corepack enable
 
