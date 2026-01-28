@@ -1,0 +1,255 @@
+#cloud-config
+# Moltbot VPS Cloud-Init for Hetzner Ubuntu (4GB RAM, lightweight)
+# Tailscale-only access, Brave browser with noVNC, dev tooling
+#
+# Usage:
+# 1. Replace YOUR_TAILSCALE_AUTH_KEY with a reusable+ephemeral key from:
+#    https://login.tailscale.com/admin/settings/keys
+# 2. Replace YOUR_GITHUB_FORK with your fork URL (e.g., git@github.com:user/moltbot.git)
+# 3. Paste into Hetzner "Cloud config" when creating the server
+# 4. After boot, Hetzner firewall: block all inbound except UDP 41641
+
+users:
+  - name: timmy
+    groups: users, admin, sudo
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    ssh_authorized_keys:
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOydEgQ3cNI4R1u69C6Nj4pu/UFjXj4+zkKg0OGm5B/U azure@arch
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINNneGS3Ip7s47xfp7Absn063qPr7e+TSaH6Etpui7bc azure@arch-personal
+
+packages:
+  - build-essential
+  - curl
+  - git
+  - ca-certificates
+  - gnupg
+  - unzip
+  - libxml2
+  - socat
+  - xvfb
+  - x11vnc
+  - novnc
+  - websockify
+  - fonts-liberation
+  - fonts-noto-color-emoji
+  - python3
+  - ufw
+  - trash-cli
+  - jq
+
+package_update: true
+package_upgrade: true
+
+write_files:
+  # SSH hardening (still listens on all interfaces, but key-only + no root)
+  - path: /etc/ssh/sshd_config.d/hardening.conf
+    content: |
+      PermitRootLogin no
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      ChallengeResponseAuthentication no
+      MaxAuthTries 3
+      AllowUsers timmy
+
+  # Systemd service for browser + VNC stack
+  - path: /etc/systemd/system/moltbot-browser.service
+    content: |
+      [Unit]
+      Description=Moltbot Browser (Brave + Xvfb + VNC)
+      After=network.target
+
+      [Service]
+      User=timmy
+      Environment=DISPLAY=:1
+      Environment=HOME=/home/timmy
+      ExecStartPre=/usr/bin/Xvfb :1 -screen 0 1280x800x24 -ac -nolisten tcp
+      ExecStart=/usr/bin/brave-browser --remote-debugging-port=18800 --user-data-dir=/home/timmy/.clawdbot/browser/clawd/user-data --no-sandbox --no-first-run --disable-dev-shm-usage about:blank
+      Restart=on-failure
+      RestartSec=5
+
+      [Install]
+      WantedBy=multi-user.target
+
+  # Systemd service for x11vnc
+  - path: /etc/systemd/system/moltbot-vnc.service
+    content: |
+      [Unit]
+      Description=Moltbot VNC Server
+      After=moltbot-browser.service
+      Requires=moltbot-browser.service
+
+      [Service]
+      User=timmy
+      Environment=DISPLAY=:1
+      ExecStart=/usr/bin/x11vnc -display :1 -rfbport 5900 -shared -forever -nopw -localhost
+      Restart=on-failure
+      RestartSec=5
+
+      [Install]
+      WantedBy=multi-user.target
+
+  # Systemd service for noVNC websockify
+  - path: /etc/systemd/system/moltbot-novnc.service
+    content: |
+      [Unit]
+      Description=Moltbot noVNC (websockify)
+      After=moltbot-vnc.service
+      Requires=moltbot-vnc.service
+
+      [Service]
+      User=timmy
+      ExecStart=/usr/bin/websockify --web /usr/share/novnc/ 6080 localhost:5900
+      Restart=on-failure
+      RestartSec=5
+
+      [Install]
+      WantedBy=multi-user.target
+
+  # Systemd timer for trash auto-purge (30 days)
+  - path: /etc/systemd/system/trash-empty.service
+    content: |
+      [Unit]
+      Description=Empty trash older than 30 days
+
+      [Service]
+      Type=oneshot
+      User=timmy
+      ExecStart=/usr/bin/trash-empty 30
+
+  - path: /etc/systemd/system/trash-empty.timer
+    content: |
+      [Unit]
+      Description=Daily trash cleanup
+
+      [Timer]
+      OnCalendar=daily
+      Persistent=true
+
+      [Install]
+      WantedBy=timers.target
+
+  # Bashrc additions for timmy
+  - path: /home/timmy/.bashrc.d/moltbot.sh
+    content: |
+      # Moltbot environment
+      export PATH="$HOME/.npm-global/bin:$HOME/moltbot/node_modules/.bin:/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:$PATH"
+      export NPM_CONFIG_PREFIX="$HOME/.npm-global"
+      export HOMEBREW_NO_AUTO_UPDATE=1
+      export HOMEBREW_NO_INSTALL_CLEANUP=1
+      
+      # Trash aliases
+      alias trash='trash-put'
+      # alias rm='echo "Use trash instead"; false'
+      
+      # Convenience aliases
+      alias ll='ls -alF'
+      alias moltbot='node ~/moltbot/dist/index.js'
+
+runcmd:
+  # --- Brave Browser ---
+  - curl -fsSLo /usr/share/keyrings/brave-browser-archive-keyring.gpg https://brave-browser-apt-release.s3.brave.com/brave-browser-archive-keyring.gpg
+  - echo "deb [signed-by=/usr/share/keyrings/brave-browser-archive-keyring.gpg] https://brave-browser-apt-release.s3.brave.com/ stable main" > /etc/apt/sources.list.d/brave-browser-release.list
+  - apt-get update
+  - DEBIAN_FRONTEND=noninteractive apt-get install -y brave-browser
+
+  # --- Node.js 22 ---
+  - mkdir -p /etc/apt/keyrings
+  - curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg
+  - echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" > /etc/apt/sources.list.d/nodesource.list
+  - apt-get update
+  - DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs
+  - corepack enable
+
+  # --- Tailscale ---
+  - curl -fsSL https://tailscale.com/install.sh | sh
+  - tailscale up --ssh --authkey=YOUR_TAILSCALE_AUTH_KEY --hostname=moltbot-vps
+
+  # --- UFW (block SSH from internet, allow Tailscale) ---
+  - ufw default deny incoming
+  - ufw default allow outgoing
+  - ufw allow 41641/udp comment 'Tailscale'
+  # SSH only accessible via Tailscale SSH or Hetzner console
+  - ufw --force enable
+
+  # --- CodexBar CLI ---
+  - curl -fsSL https://github.com/steipete/CodexBar/releases/download/v0.18.0-beta.2/CodexBarCLI-v0.18.0-beta.2-linux-x86_64.tar.gz | tar -xzf - -C /usr/local/bin
+  - chmod +x /usr/local/bin/codexbar
+
+  # --- Setup timmy's environment ---
+  - mkdir -p /home/timmy/.npm-global /home/timmy/.clawdbot /home/timmy/.bashrc.d /home/timmy/.ssh
+  - chown -R timmy:timmy /home/timmy
+
+  # --- Source bashrc.d in bashrc ---
+  - echo 'for f in ~/.bashrc.d/*.sh; do [ -r "$f" ] && . "$f"; done' >> /home/timmy/.bashrc
+
+  # --- Homebrew (as timmy) ---
+  - mkdir -p /home/linuxbrew/.linuxbrew
+  - chown -R timmy:timmy /home/linuxbrew
+  - su - timmy -c 'NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
+
+  # --- GitHub CLI (as timmy via brew) ---
+  - su - timmy -c '/home/linuxbrew/.linuxbrew/bin/brew install gh'
+
+  # --- Clone and build moltbot from source (as timmy) ---
+  # Replace YOUR_GITHUB_FORK with your fork URL
+  - su - timmy -c 'git clone YOUR_GITHUB_FORK ~/moltbot'
+  - su - timmy -c 'cd ~/moltbot && npm install -g pnpm && pnpm install && pnpm build'
+
+  # --- Configure moltbot ---
+  - su - timmy -c 'mkdir -p ~/.clawdbot/browser/clawd/user-data'
+  - |
+    cat > /home/timmy/.clawdbot/moltbot.json << 'EOF'
+    {
+      "gateway": {
+        "bind": "loopback",
+        "tailscale": { "mode": "serve" },
+        "auth": { "mode": "token" }
+      },
+      "browser": {
+        "executablePath": "/usr/bin/brave-browser",
+        "headless": false,
+        "noSandbox": true,
+        "defaultProfile": "clawd"
+      }
+    }
+    EOF
+  - chown timmy:timmy /home/timmy/.clawdbot/moltbot.json
+
+  # --- Moltbot gateway systemd service ---
+  - |
+    cat > /etc/systemd/system/moltbot-gateway.service << 'EOF'
+    [Unit]
+    Description=Moltbot Gateway
+    After=network-online.target tailscaled.service
+    Wants=network-online.target
+
+    [Service]
+    User=timmy
+    WorkingDirectory=/home/timmy/moltbot
+    ExecStart=/usr/bin/node /home/timmy/moltbot/dist/index.js gateway --port 18789
+    Restart=always
+    RestartSec=5
+    Environment=NODE_ENV=production
+
+    [Install]
+    WantedBy=multi-user.target
+    EOF
+
+  # --- Enable services ---
+  - systemctl daemon-reload
+  - systemctl enable --now moltbot-browser.service
+  - systemctl enable --now moltbot-vnc.service
+  - systemctl enable --now moltbot-novnc.service
+  - systemctl enable --now moltbot-gateway.service
+  - systemctl enable --now trash-empty.timer
+
+  # --- Tailscale serve for noVNC (HTTPS on tailnet) ---
+  - tailscale serve --bg --https=6443 http://localhost:6080
+
+  # --- Generate gateway token ---
+  - su - timmy -c 'cd ~/moltbot && node dist/index.js doctor --generate-gateway-token'
+
+  # --- Done ---
+  - echo "Moltbot VPS setup complete!" > /home/timmy/setup-complete.txt
+  - chown timmy:timmy /home/timmy/setup-complete.txt
