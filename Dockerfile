@@ -85,8 +85,9 @@ ENV NODE_ENV=production
 
 # Configure npm to use a user-writable global prefix for skill installs
 # This allows the node user to install global npm packages without root
-RUN mkdir -p /home/node/.npm-global && \
-    chown -R node:node /home/node/.npm-global && \
+# Also pre-create directories for volume mounts with correct ownership
+RUN mkdir -p /home/node/.npm-global /home/node/.config /home/node/Downloads && \
+    chown -R node:node /home/node/.npm-global /home/node/.config /home/node/Downloads && \
     npm config set prefix /home/node/.npm-global --global
 ENV PATH="/home/node/.npm-global/bin:/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:${PATH}"
 ENV NPM_CONFIG_PREFIX="/home/node/.npm-global"
