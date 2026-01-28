@@ -2,7 +2,7 @@
 set -euo pipefail
 
 export DISPLAY=:1
-export HOME=/tmp/openclaw-home
+export HOME=/workspace/browser-home
 export XDG_CONFIG_HOME="${HOME}/.config"
 export XDG_CACHE_HOME="${HOME}/.cache"
 
@@ -15,15 +15,26 @@ HEADLESS="${OPENCLAW_BROWSER_HEADLESS:-${CLAWDBOT_BROWSER_HEADLESS:-0}}"
 ALLOW_NO_SANDBOX="${OPENCLAW_BROWSER_NO_SANDBOX:-${CLAWDBOT_BROWSER_NO_SANDBOX:-0}}"
 NOVNC_PASSWORD="${OPENCLAW_BROWSER_NOVNC_PASSWORD:-${CLAWDBOT_BROWSER_NOVNC_PASSWORD:-}}"
 
-mkdir -p "${HOME}" "${HOME}/.chrome" "${XDG_CONFIG_HOME}" "${XDG_CACHE_HOME}"
+mkdir -p "${HOME}" "${HOME}/.chrome" "${XDG_CONFIG_HOME}" "${XDG_CACHE_HOME}" /workspace/chrome-profile
 
-Xvfb :1 -screen 0 1280x800x24 -ac -nolisten tcp &
+# clean stale X lock if Xvfb not running
+if [ -f /tmp/.X1-lock ] && ! pgrep -x Xvfb >/dev/null; then
+  rm -f /tmp/.X1-lock /tmp/.X11-unix/X1
+fi
+
+# start Xvfb only if not already running
+if ! pgrep -x Xvfb >/dev/null; then
+  Xvfb :1 -screen 0 1280x800x24 -ac -nolisten tcp &
+fi
+
+# wait for DISPLAY to be ready
+for _ in $(seq 1 50); do
+  xdpyinfo -display :1 >/dev/null 2>&1 && break
+  sleep 0.1
+done
 
 if [[ "${HEADLESS}" == "1" ]]; then
-  CHROME_ARGS=(
-    "--headless=new"
-    "--disable-gpu"
-  )
+  CHROME_ARGS=( "--headless=new" "--disable-gpu" )
 else
   CHROME_ARGS=()
 fi
@@ -37,7 +48,7 @@ fi
 CHROME_ARGS+=(
   "--remote-debugging-address=127.0.0.1"
   "--remote-debugging-port=${CHROME_CDP_PORT}"
-  "--user-data-dir=${HOME}/.chrome"
+  "--user-data-dir=/workspace/chrome-profile"
   "--no-first-run"
   "--no-default-browser-check"
   "--disable-dev-shm-usage"
@@ -46,6 +57,8 @@ CHROME_ARGS+=(
   "--disable-breakpad"
   "--disable-crash-reporter"
   "--metrics-recording-only"
+  "--password-store=basic"
+  "--use-mock-keychain"
 )
 
 if [[ "${ALLOW_NO_SANDBOX}" == "1" ]]; then
