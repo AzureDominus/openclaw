@@ -28,6 +28,21 @@ ENV HOMEBREW_NO_AUTO_UPDATE=1
 ENV HOMEBREW_NO_INSTALL_CLEANUP=1
 USER root
 
+# Install system dependencies for Homebrew
+RUN apt-get update && \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      build-essential procps curl file git && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
+
+# Install Homebrew as the node user
+USER node
+RUN NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+ENV PATH="/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:${PATH}"
+ENV HOMEBREW_NO_AUTO_UPDATE=1
+ENV HOMEBREW_NO_INSTALL_CLEANUP=1
+USER root
+
 # Install Bun (required for build scripts)
 RUN curl -fsSL https://bun.sh/install | bash
 ENV PATH="/root/.bun/bin:${PATH}"
