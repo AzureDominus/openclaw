@@ -1,9 +1,10 @@
 FROM node:22-bookworm@sha256:cd7bcd2e7a1e6f72052feb023c7f6b722205d3fcab7bbcbd2d1bfdab10b1e935
 
-# Install system dependencies for Homebrew
+# Install system dependencies for Homebrew.
+# libxml2 is required by CodexBar CLI (model-usage skill).
 RUN apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      build-essential procps curl file git unzip && \
+      build-essential procps curl file git unzip libxml2 && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
