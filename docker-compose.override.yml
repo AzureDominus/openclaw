@@ -11,6 +11,8 @@ services:
       - /volume1/docker/Projects/MoltBot/brave-data:/home/node/.config/BraveSoftware
       # Downloads folder (persistent)
       - /volume1/docker/Projects/MoltBot/downloads:/home/node/Downloads
+      # Playwright browsers cache (persistent - avoids re-downloading on restart)
+      - /volume1/docker/Projects/MoltBot/playwright-cache:/home/node/.cache/ms-playwright
 
   moltbot-cli:
     volumes:
