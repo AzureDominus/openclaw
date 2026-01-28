@@ -193,7 +193,7 @@ runcmd:
 
   # --- Clone and build moltbot from source (as timmy) ---
   # Replace YOUR_GITHUB_FORK with your fork URL
-  - su - timmy -c 'git clone YOUR_GITHUB_FORK ~/moltbot'
+  - su - timmy -c 'git clone https://github.com/AzureDominus/moltbot.git ~/moltbot'
   - su - timmy -c 'cd ~/moltbot && npm install -g pnpm && pnpm install && pnpm build'
 
   # --- Configure moltbot ---
