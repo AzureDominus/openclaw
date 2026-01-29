@@ -5,7 +5,7 @@
 # Usage:
 # 1. Replace YOUR_TAILSCALE_AUTH_KEY with a reusable+ephemeral key from:
 #    https://login.tailscale.com/admin/settings/keys
-# 2. Replace YOUR_GITHUB_FORK with your fork URL (e.g., git@github.com:user/moltbot.git)
+# 2. Replace YOUR_GITHUB_FORK with your fork URL (e.g., https://github.com/user/moltbot.git)
 # 3. Paste into Hetzner "Cloud config" when creating the server
 # 4. After boot, Hetzner firewall: block all inbound except UDP 41641
 
@@ -14,6 +14,8 @@ users:
     groups: users, admin, sudo
     sudo: ALL=(ALL) NOPASSWD:ALL
     shell: /bin/bash
+    lock_passwd: false
+    passwd: $6$54BaQ8LTuI0gmJxX$vgWuppD/9PqUTBpAzWtxtfdEl1Y2aakLtRy1i5jZQXOCWiaOA40peysu5DQqORh0PDyd/31pYA4ZipVmBMFmQ.
     ssh_authorized_keys:
       - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOydEgQ3cNI4R1u69C6Nj4pu/UFjXj4+zkKg0OGm5B/U azure@arch
       - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINNneGS3Ip7s47xfp7Absn063qPr7e+TSaH6Etpui7bc azure@arch-personal
@@ -52,18 +54,35 @@ write_files:
       MaxAuthTries 3
       AllowUsers timmy
 
-  # Systemd service for browser + VNC stack
+  # Systemd service for Xvfb (virtual display)
+  - path: /etc/systemd/system/moltbot-xvfb.service
+    content: |
+      [Unit]
+      Description=Xvfb Virtual Display
+      After=network.target
+
+      [Service]
+      User=timmy
+      ExecStart=/usr/bin/Xvfb :1 -screen 0 1280x800x24 -ac -nolisten tcp
+      Restart=on-failure
+      RestartSec=5
+
+      [Install]
+      WantedBy=multi-user.target
+
+  # Systemd service for browser
   - path: /etc/systemd/system/moltbot-browser.service
     content: |
       [Unit]
-      Description=Moltbot Browser (Brave + Xvfb + VNC)
-      After=network.target
+      Description=Moltbot Browser (Brave)
+      After=moltbot-xvfb.service
+      Requires=moltbot-xvfb.service
 
       [Service]
       User=timmy
       Environment=DISPLAY=:1
       Environment=HOME=/home/timmy
-      ExecStartPre=/usr/bin/Xvfb :1 -screen 0 1280x800x24 -ac -nolisten tcp
+      ExecStartPre=/bin/sleep 2
       ExecStart=/usr/bin/brave-browser --remote-debugging-port=18800 --user-data-dir=/home/timmy/.clawdbot/browser/clawd/user-data --no-sandbox --no-first-run --disable-dev-shm-usage about:blank
       Restart=on-failure
       RestartSec=5
@@ -163,7 +182,8 @@ runcmd:
 
   # --- Tailscale ---
   - curl -fsSL https://tailscale.com/install.sh | sh
-  - tailscale up --ssh --authkey=YOUR_TAILSCALE_AUTH_KEY --hostname=timmiy-hetzner-vps
+  - apt-get update && apt-get install -y tailscale
+  - tailscale up --ssh --authkey=YOUR_TAILSCALE_AUTH_KEY --hostname=timmys-crib
 
   # --- UFW (block SSH from internet, allow Tailscale) ---
   - ufw default deny incoming
@@ -180,33 +200,32 @@ runcmd:
   - mkdir -p /home/timmy/.npm-global /home/timmy/.clawdbot /home/timmy/.bashrc.d /home/timmy/.ssh
   - chown -R timmy:timmy /home/timmy
 
-  # --- Set password for Hetzner console access (prompted to change on first login) ---
-  - echo 'timmy:changeme123' | chpasswd
-  - chage -d 0 timmy
-
   # --- Source bashrc.d in bashrc ---
   - echo 'for f in ~/.bashrc.d/*.sh; do [ -r "$f" ] && . "$f"; done' >> /home/timmy/.bashrc
 
   # --- Homebrew (as timmy) ---
   - mkdir -p /home/linuxbrew/.linuxbrew
   - chown -R timmy:timmy /home/linuxbrew
-  - su - timmy -c 'NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
+  - sudo -u timmy NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 
   # --- GitHub CLI (as timmy via brew) ---
-  - su - timmy -c '/home/linuxbrew/.linuxbrew/bin/brew install gh'
+  - sudo -u timmy /home/linuxbrew/.linuxbrew/bin/brew install gh
 
   # --- Clone and build moltbot from source (as timmy) ---
   # Replace YOUR_GITHUB_FORK with your fork URL
-  - su - timmy -c 'git clone https://github.com/AzureDominus/moltbot.git ~/moltbot'
-  - su - timmy -c 'cd ~/moltbot && npm install -g pnpm && pnpm install && pnpm build'
+  - sudo -u timmy git clone https://github.com/AzureDominus/moltbot.git /home/timmy/moltbot
+  - npm install -g pnpm
+  - sudo -u timmy bash -c 'cd /home/timmy/moltbot && pnpm install && pnpm build'
 
   # --- Configure moltbot ---
-  - su - timmy -c 'mkdir -p ~/.clawdbot/browser/clawd/user-data'
+  - mkdir -p /home/timmy/.clawdbot/browser/clawd/user-data
+  - chown -R timmy:timmy /home/timmy/.clawdbot
   - |
     cat > /home/timmy/.clawdbot/moltbot.json << 'EOF'
     {
       "gateway": {
         "bind": "loopback",
+        "tls": { "enabled": false },
         "tailscale": { "mode": "serve" },
         "auth": { "mode": "token" }
       },
@@ -225,8 +244,9 @@ runcmd:
     cat > /etc/systemd/system/moltbot-gateway.service << 'EOF'
     [Unit]
     Description=Moltbot Gateway
-    After=network-online.target tailscaled.service
+    After=network-online.target tailscaled.service moltbot-xvfb.service
     Wants=network-online.target
+    Requires=moltbot-xvfb.service
 
     [Service]
     User=timmy
@@ -234,7 +254,11 @@ runcmd:
     ExecStart=/usr/bin/node /home/timmy/moltbot/dist/index.js gateway --port 18789
     Restart=always
     RestartSec=5
+    KillMode=process
+    Environment=HOME=/home/timmy
+    Environment=DISPLAY=:1
     Environment=NODE_ENV=production
+    Environment="PATH=/home/timmy/.npm-global/bin:/home/timmy/moltbot/node_modules/.bin:/home/linuxbrew/.linuxbrew/bin:/usr/local/bin:/usr/bin:/bin"
 
     [Install]
     WantedBy=multi-user.target
@@ -242,17 +266,25 @@ runcmd:
 
   # --- Enable services ---
   - systemctl daemon-reload
+  - systemctl enable --now moltbot-xvfb.service
   - systemctl enable --now moltbot-browser.service
   - systemctl enable --now moltbot-vnc.service
   - systemctl enable --now moltbot-novnc.service
   - systemctl enable --now moltbot-gateway.service
   - systemctl enable --now trash-empty.timer
 
-  # --- Tailscale serve for noVNC (HTTPS on tailnet) ---
+  # --- Tailscale serve for noVNC and gateway (HTTPS on tailnet) ---
+  - tailscale serve --bg --https=443 http://127.0.0.1:18789
   - tailscale serve --bg --https=6443 http://localhost:6080
 
+  # --- Add index.html redirect for noVNC ---
+  - echo '<meta http-equiv="refresh" content="0; url=vnc.html">' > /usr/share/novnc/index.html
+
   # --- Generate gateway token ---
-  - su - timmy -c 'cd ~/moltbot && node dist/index.js doctor --generate-gateway-token'
+  - sudo -u timmy bash -c 'cd /home/timmy/moltbot && node dist/index.js doctor --generate-gateway-token'
+
+  # --- Force password change on first console login (after all setup) ---
+  - chage -d 0 timmy
 
   # --- Done ---
   - echo "Moltbot VPS setup complete!" > /home/timmy/setup-complete.txt
