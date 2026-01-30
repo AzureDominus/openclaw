@@ -1,11 +1,11 @@
 #cloud-config
-# Moltbot VPS Cloud-Init for Hetzner Ubuntu (4GB RAM, lightweight)
+# OpenClaw VPS Cloud-Init for Hetzner Ubuntu (4GB RAM, lightweight)
 # Tailscale-only access, Brave browser with noVNC, dev tooling
 #
 # Usage:
 # 1. Replace YOUR_TAILSCALE_AUTH_KEY with a reusable+ephemeral key from:
 #    https://login.tailscale.com/admin/settings/keys
-# 2. Replace YOUR_GITHUB_FORK with your fork URL (e.g., https://github.com/user/moltbot.git)
+# 2. Replace YOUR_GITHUB_FORK with your fork URL (e.g., https://github.com/user/openclaw.git)
 # 3. Paste into Hetzner "Cloud config" when creating the server
 # 4. After boot, Hetzner firewall: block all inbound except UDP 41641
 
@@ -55,7 +55,7 @@ write_files:
       AllowUsers timmy
 
   # Systemd service for Xvfb (virtual display)
-  - path: /etc/systemd/system/moltbot-xvfb.service
+  - path: /etc/systemd/system/openclaw-xvfb.service
     content: |
       [Unit]
       Description=Xvfb Virtual Display
@@ -71,19 +71,19 @@ write_files:
       WantedBy=multi-user.target
 
   # Systemd service for browser
-  - path: /etc/systemd/system/moltbot-browser.service
+  - path: /etc/systemd/system/openclaw-browser.service
     content: |
       [Unit]
-      Description=Moltbot Browser (Brave)
-      After=moltbot-xvfb.service
-      Requires=moltbot-xvfb.service
+      Description=OpenClaw Browser (Brave)
+      After=openclaw-xvfb.service
+      Requires=openclaw-xvfb.service
 
       [Service]
       User=timmy
       Environment=DISPLAY=:1
       Environment=HOME=/home/timmy
       ExecStartPre=/bin/sleep 2
-      ExecStart=/usr/bin/brave-browser --remote-debugging-port=18800 --user-data-dir=/home/timmy/.clawdbot/browser/clawd/user-data --no-sandbox --no-first-run --disable-dev-shm-usage about:blank
+      ExecStart=/usr/bin/brave-browser --remote-debugging-port=18800 --user-data-dir=/home/timmy/.openclaw/browser/clawd/user-data --no-sandbox --no-first-run --disable-dev-shm-usage about:blank
       Restart=on-failure
       RestartSec=5
 
@@ -91,12 +91,12 @@ write_files:
       WantedBy=multi-user.target
 
   # Systemd service for x11vnc
-  - path: /etc/systemd/system/moltbot-vnc.service
+  - path: /etc/systemd/system/openclaw-vnc.service
     content: |
       [Unit]
-      Description=Moltbot VNC Server
-      After=moltbot-browser.service
-      Requires=moltbot-browser.service
+      Description=OpenClaw VNC Server
+      After=openclaw-browser.service
+      Requires=openclaw-browser.service
 
       [Service]
       User=timmy
@@ -109,12 +109,12 @@ write_files:
       WantedBy=multi-user.target
 
   # Systemd service for noVNC websockify
-  - path: /etc/systemd/system/moltbot-novnc.service
+  - path: /etc/systemd/system/openclaw-novnc.service
     content: |
       [Unit]
-      Description=Moltbot noVNC (websockify)
-      After=moltbot-vnc.service
-      Requires=moltbot-vnc.service
+      Description=OpenClaw noVNC (websockify)
+      After=openclaw-vnc.service
+      Requires=openclaw-vnc.service
 
       [Service]
       User=timmy
@@ -149,10 +149,10 @@ write_files:
       WantedBy=timers.target
 
   # Bashrc additions for timmy
-  - path: /home/timmy/.bashrc.d/moltbot.sh
+  - path: /home/timmy/.bashrc.d/openclaw.sh
     content: |
-      # Moltbot environment
-      export PATH="$HOME/.npm-global/bin:$HOME/moltbot/node_modules/.bin:/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:$PATH"
+      # OpenClaw environment
+      export PATH="$HOME/.npm-global/bin:$HOME/openclaw/node_modules/.bin:/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:$PATH"
       export NPM_CONFIG_PREFIX="$HOME/.npm-global"
       export HOMEBREW_NO_AUTO_UPDATE=1
       export HOMEBREW_NO_INSTALL_CLEANUP=1
@@ -163,7 +163,7 @@ write_files:
       
       # Convenience aliases
       alias ll='ls -alF'
-      alias moltbot='node ~/moltbot/dist/index.js'
+      alias openclaw='node ~/openclaw/dist/index.js'
 
 runcmd:
   # --- Brave Browser ---
@@ -197,7 +197,7 @@ runcmd:
   - chmod +x /usr/local/bin/codexbar
 
   # --- Setup timmy's environment ---
-  - mkdir -p /home/timmy/.npm-global /home/timmy/.clawdbot /home/timmy/.bashrc.d /home/timmy/.ssh
+  - mkdir -p /home/timmy/.npm-global /home/timmy/.openclaw /home/timmy/.bashrc.d /home/timmy/.ssh
   - chown -R timmy:timmy /home/timmy
 
   # --- Source bashrc.d in bashrc ---
@@ -211,17 +211,17 @@ runcmd:
   # --- GitHub CLI (as timmy via brew) ---
   - sudo -u timmy /home/linuxbrew/.linuxbrew/bin/brew install gh
 
-  # --- Clone and build moltbot from source (as timmy) ---
+  # --- Clone and build openclaw from source (as timmy) ---
   # Replace YOUR_GITHUB_FORK with your fork URL
-  - sudo -u timmy git clone https://github.com/AzureDominus/moltbot.git /home/timmy/moltbot
+  - sudo -u timmy git clone https://github.com/AzureDominus/openclaw.git /home/timmy/openclaw
   - npm install -g pnpm
-  - sudo -u timmy bash -c 'cd /home/timmy/moltbot && pnpm install && pnpm build'
+  - sudo -u timmy bash -c 'cd /home/timmy/openclaw && pnpm install && pnpm build'
 
-  # --- Configure moltbot ---
-  - mkdir -p /home/timmy/.clawdbot/browser/clawd/user-data
-  - chown -R timmy:timmy /home/timmy/.clawdbot
+  # --- Configure openclaw ---
+  - mkdir -p /home/timmy/.openclaw/browser/clawd/user-data
+  - chown -R timmy:timmy /home/timmy/.openclaw
   - |
-    cat > /home/timmy/.clawdbot/moltbot.json << 'EOF'
+    cat > /home/timmy/.openclaw/openclaw.json << 'EOF'
     {
       "gateway": {
         "bind": "loopback",
@@ -237,28 +237,28 @@ runcmd:
       }
     }
     EOF
-  - chown timmy:timmy /home/timmy/.clawdbot/moltbot.json
+  - chown timmy:timmy /home/timmy/.openclaw/openclaw.json
 
-  # --- Moltbot gateway systemd service ---
+  # --- OpenClaw gateway systemd service ---
   - |
-    cat > /etc/systemd/system/moltbot-gateway.service << 'EOF'
+    cat > /etc/systemd/system/openclaw-gateway.service << 'EOF'
     [Unit]
-    Description=Moltbot Gateway
-    After=network-online.target tailscaled.service moltbot-xvfb.service
+    Description=OpenClaw Gateway
+    After=network-online.target tailscaled.service openclaw-xvfb.service
     Wants=network-online.target
-    Requires=moltbot-xvfb.service
+    Requires=openclaw-xvfb.service
 
     [Service]
     User=timmy
-    WorkingDirectory=/home/timmy/moltbot
-    ExecStart=/usr/bin/node /home/timmy/moltbot/dist/index.js gateway --port 18789
+    WorkingDirectory=/home/timmy/openclaw
+    ExecStart=/usr/bin/node /home/timmy/openclaw/dist/index.js gateway --port 18789
     Restart=always
     RestartSec=5
     KillMode=process
     Environment=HOME=/home/timmy
     Environment=DISPLAY=:1
     Environment=NODE_ENV=production
-    Environment="PATH=/home/timmy/.npm-global/bin:/home/timmy/moltbot/node_modules/.bin:/home/linuxbrew/.linuxbrew/bin:/usr/local/bin:/usr/bin:/bin"
+    Environment="PATH=/home/timmy/.npm-global/bin:/home/timmy/openclaw/node_modules/.bin:/home/linuxbrew/.linuxbrew/bin:/usr/local/bin:/usr/bin:/bin"
 
     [Install]
     WantedBy=multi-user.target
@@ -315,11 +315,11 @@ runcmd:
 
   # --- Enable services ---
   - systemctl daemon-reload
-  - systemctl enable --now moltbot-xvfb.service
-  - systemctl enable --now moltbot-browser.service
-  - systemctl enable --now moltbot-vnc.service
-  - systemctl enable --now moltbot-novnc.service
-  - systemctl enable --now moltbot-gateway.service
+  - systemctl enable --now openclaw-xvfb.service
+  - systemctl enable --now openclaw-browser.service
+  - systemctl enable --now openclaw-vnc.service
+  - systemctl enable --now openclaw-novnc.service
+  - systemctl enable --now openclaw-gateway.service
   - systemctl enable --now trash-empty.timer
 
   # --- Tailscale serve for noVNC and gateway (HTTPS on tailnet) ---
@@ -330,11 +330,11 @@ runcmd:
   - echo '<meta http-equiv="refresh" content="0; url=vnc.html">' > /usr/share/novnc/index.html
 
   # --- Generate gateway token ---
-  - sudo -u timmy bash -c 'cd /home/timmy/moltbot && node dist/index.js doctor --generate-gateway-token'
+  - sudo -u timmy bash -c 'cd /home/timmy/openclaw && node dist/index.js doctor --generate-gateway-token'
 
   # --- Force password change on first console login (after all setup) ---
   - chage -d 0 timmy
 
   # --- Done ---
-  - echo "Moltbot VPS setup complete!" > /home/timmy/setup-complete.txt
+  - echo "OpenClaw VPS setup complete!" > /home/timmy/setup-complete.txt
   - chown timmy:timmy /home/timmy/setup-complete.txt
