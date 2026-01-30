@@ -325,7 +325,48 @@ export async function monitorWebChannel(
         });
       } catch (error) {
         if (!isRetryableAuthUnstableError(error)) {
-          throw error;
+          const retryDecision = controller.consumeReconnectAttempt();
+          const errorText = formatError(error);
+          statusController.noteReconnectAttempts(retryDecision.reconnectAttempts);
+          statusController.noteClose({
+            error: errorText,
+            reconnectAttempts: retryDecision.reconnectAttempts,
+            healthState: retryDecision.healthState,
+          });
+          if (retryDecision.action === "stop") {
+            reconnectLogger.warn(
+              {
+                connectionId,
+                reconnectAttempts: retryDecision.reconnectAttempts,
+                maxAttempts: reconnectPolicy.maxAttempts,
+                error: errorText,
+              },
+              "web reconnect: max attempts reached on initial connect",
+            );
+            runtime.error(
+              `WhatsApp Web initial connection failed after ${retryDecision.reconnectAttempts}/${reconnectPolicy.maxAttempts} attempts. Stopping web monitoring. (${errorText})`,
+            );
+            await controller.shutdown();
+            break;
+          }
+          reconnectLogger.warn(
+            {
+              connectionId,
+              reconnectAttempts: retryDecision.reconnectAttempts,
+              delayMs: retryDecision.delayMs,
+              error: errorText,
+            },
+            "web reconnect: initial connection failed; retrying",
+          );
+          runtime.error(
+            `WhatsApp Web initial connection failed. Retry ${retryDecision.reconnectAttempts}/${reconnectPolicy.maxAttempts || "∞"} in ${formatDurationPrecise(retryDecision.delayMs ?? 0)}. (${errorText})`,
+          );
+          try {
+            await controller.waitBeforeRetry(retryDecision.delayMs ?? 0);
+          } catch {
+            break;
+          }
+          continue;
         }
         const retryDecision = controller.consumeReconnectAttempt();
         statusController.noteReconnectAttempts(retryDecision.reconnectAttempts);
