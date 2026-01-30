@@ -264,6 +264,55 @@ runcmd:
     WantedBy=multi-user.target
     EOF
 
+  # --- RustDesk (mobile-friendly remote desktop) ---
+  - curl -fsSL -o /tmp/rustdesk.deb https://github.com/rustdesk/rustdesk/releases/download/1.4.5/rustdesk-1.4.5-x86_64.deb
+  - DEBIAN_FRONTEND=noninteractive apt-get install -y /tmp/rustdesk.deb
+  - rm /tmp/rustdesk.deb
+  # RustDesk systemd drop-in for DISPLAY
+  - mkdir -p /etc/systemd/system/rustdesk.service.d
+  - |
+    cat > /etc/systemd/system/rustdesk.service.d/display.conf << 'EOF'
+    [Service]
+    Environment=DISPLAY=:1
+    EOF
+  # RustDesk config: direct IP access, Tailscale-only whitelist
+  - mkdir -p /root/.config/rustdesk
+  - |
+    cat > /root/.config/rustdesk/RustDesk2.toml << 'EOF'
+    rendezvous_server = 'rs-ny.rustdesk.com:21116'
+    [options]
+    approve-mode = 'password'
+    direct-server = 'Y'
+    direct-access-port = '21118'
+    whitelist = '100.0.0.0/8'
+    EOF
+  # RustDesk setup script (sets password and enables service)
+  - |
+    cat > /usr/local/bin/rustdesk-setup << 'SCRIPT'
+    #!/bin/bash
+    set -e
+    if [ -z "$1" ]; then
+      echo "Usage: rustdesk-setup <password>"
+      echo "Sets RustDesk password and enables the service."
+      exit 1
+    fi
+    echo "Setting RustDesk password..."
+    rustdesk --password "$1"
+    echo "Enabling and starting RustDesk service..."
+    systemctl daemon-reload
+    systemctl enable --now rustdesk.service
+    sleep 2
+    TAILSCALE_IP=$(tailscale ip -4 2>/dev/null || echo "unknown")
+    echo ""
+    echo "RustDesk is ready!"
+    echo "  Connect to: $TAILSCALE_IP"
+    echo "  Password: $1"
+    echo "  (Phone must be on Tailscale)"
+    SCRIPT
+  - chmod +x /usr/local/bin/rustdesk-setup
+  # Disable rustdesk by default (user must run rustdesk-setup)
+  - systemctl disable rustdesk.service
+
   # --- Enable services ---
   - systemctl daemon-reload
   - systemctl enable --now moltbot-xvfb.service
