@@ -17,6 +17,22 @@ import {
   parseLsofOutput,
 } from "./ports.js";
 
+const renderListeners = (
+  command: string,
+  entries: Array<{ pid: number; command: string }> = [{ pid: 42, command: "node" }],
+): string => {
+  if (command === "ss") {
+    return `${entries
+      .map(
+        (entry) =>
+          `LISTEN 0 511 127.0.0.1:18789 0.0.0.0:* users:(("${entry.command}",pid=${entry.pid},fd=22))`,
+      )
+      .join("\n")}\n`;
+  }
+
+  return `${entries.flatMap((entry) => [`p${entry.pid}`, `c${entry.command}`]).join("\n")}\n`;
+};
+
 describe("gateway --force helpers", () => {
   let originalKill: typeof process.kill;
 
@@ -38,27 +54,26 @@ describe("gateway --force helpers", () => {
     ]);
   });
 
-  it("returns empty list when lsof finds nothing", () => {
-    (execFileSync as unknown as Mock).mockImplementation(() => {
-      const err = new Error("no matches") as NodeJS.ErrnoException & { status?: number };
-      err.status = 1; // lsof uses exit 1 for no matches
-      throw err;
-    });
+  it("returns empty list when no listeners are present", () => {
+    (execFileSync as unknown as Mock).mockReturnValue("");
     expect(listPortListeners(18789)).toEqual([]);
   });
 
-  it("throws when lsof missing", () => {
+  it("throws when port inspection tools missing", () => {
     (execFileSync as unknown as Mock).mockImplementation(() => {
       const err = new Error("not found") as NodeJS.ErrnoException;
       err.code = "ENOENT";
       throw err;
     });
-    expect(() => listPortListeners(18789)).toThrow(/lsof not found/);
+    expect(() => listPortListeners(18789)).toThrow(/need ss or lsof/i);
   });
 
   it("kills each listener and returns metadata", () => {
-    (execFileSync as unknown as Mock).mockReturnValue(
-      ["p42", "cnode", "p99", "cssh", ""].join("\n"),
+    (execFileSync as unknown as Mock).mockImplementation((command: string) =>
+      renderListeners(command, [
+        { pid: 42, command: "node" },
+        { pid: 99, command: "ssh" },
+      ]),
     );
     const killMock = vi.fn();
     process.kill = killMock;
@@ -78,14 +93,10 @@ describe("gateway --force helpers", () => {
   it("retries until the port is free", async () => {
     vi.useFakeTimers();
     let call = 0;
-    (execFileSync as unknown as Mock).mockImplementation(() => {
+    (execFileSync as unknown as Mock).mockImplementation((command: string) => {
       call += 1;
-      // 1st call: initial listeners to kill; 2nd call: still listed; 3rd call: gone.
-      if (call === 1) {
-        return ["p42", "cnode", ""].join("\n");
-      }
-      if (call === 2) {
-        return ["p42", "cnode", ""].join("\n");
+      if (call <= 2) {
+        return renderListeners(command, [{ pid: 42, command: "node" }]);
       }
       return "";
     });
@@ -113,11 +124,10 @@ describe("gateway --force helpers", () => {
   it("escalates to SIGKILL if SIGTERM doesn't free the port", async () => {
     vi.useFakeTimers();
     let call = 0;
-    (execFileSync as unknown as Mock).mockImplementation(() => {
+    (execFileSync as unknown as Mock).mockImplementation((command: string) => {
       call += 1;
-      // 1st call: initial kill list; then keep showing until after SIGKILL.
       if (call <= 6) {
-        return ["p42", "cnode", ""].join("\n");
+        return renderListeners(command, [{ pid: 42, command: "node" }]);
       }
       return "";
     });

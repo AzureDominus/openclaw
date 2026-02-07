@@ -156,11 +156,11 @@ write_files:
       export NPM_CONFIG_PREFIX="$HOME/.npm-global"
       export HOMEBREW_NO_AUTO_UPDATE=1
       export HOMEBREW_NO_INSTALL_CLEANUP=1
-      
+
       # Trash aliases
       alias trash='trash-put'
       # alias rm='echo "Use trash instead"; false'
-      
+
       # Convenience aliases
       alias ll='ls -alF'
       alias openclaw='node ~/openclaw/dist/index.js'
@@ -238,7 +238,6 @@ runcmd:
     }
     EOF
   - chown timmy:timmy /home/timmy/.openclaw/openclaw.json
-
   # --- OpenClaw gateway systemd service ---
   - |
     cat > /etc/systemd/system/openclaw-gateway.service << 'EOF'
