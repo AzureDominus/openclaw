@@ -21,6 +21,17 @@ const forceFreePortAndWait = vi.fn<
   waitedMs: 0,
   escalatedToSigkill: false,
 }));
+const forceKillOpenclawGatewayProcessesAndWait = vi.fn(async () => ({
+  killed: [],
+  waitedMs: 0,
+  escalatedToSigkill: false,
+}));
+const inspectPortUsage = vi.fn(async () => ({
+  port: 18789,
+  status: "free",
+  listeners: [],
+  hints: [],
+}));
 const serviceIsLoaded = vi.fn().mockResolvedValue(true);
 const discoverGatewayBeacons = vi.fn<(opts: unknown) => Promise<DiscoveredBeacon[]>>(
   async () => [],
@@ -54,7 +65,17 @@ vi.mock("../runtime.js", () => ({
 
 vi.mock("./ports.js", () => ({
   forceFreePortAndWait: (port: number) => forceFreePortAndWait(port),
+  forceKillOpenclawGatewayProcessesAndWait: () => forceKillOpenclawGatewayProcessesAndWait(),
 }));
+
+vi.mock("../infra/ports.js", async (importOriginal) => {
+  const mod = await importOriginal<typeof import("../infra/ports.js")>();
+  return {
+    ...mod,
+    inspectPortUsage: (port: number) => inspectPortUsage(port),
+    formatPortDiagnostics: () => [],
+  };
+});
 
 vi.mock("../daemon/service.js", () => ({
   resolveGatewayService: () => ({
