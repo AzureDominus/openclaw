@@ -201,6 +201,114 @@ function resolveGatewayLockPath(env: NodeJS.ProcessEnv) {
   return { lockPath, configPath };
 }
 
+export type ForceReleaseGatewayLockResult = {
+  lockPath: string;
+  ownerPid?: number;
+  removedLock: boolean;
+  waitedMs: number;
+  escalatedToSigkill: boolean;
+};
+
+export async function forceReleaseGatewayLockAndWait(
+  opts: {
+    env?: NodeJS.ProcessEnv;
+    timeoutMs?: number;
+    intervalMs?: number;
+    sigtermTimeoutMs?: number;
+    platform?: NodeJS.Platform;
+  } = {},
+): Promise<ForceReleaseGatewayLockResult> {
+  const env = opts.env ?? process.env;
+  const timeoutMs = Math.max(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS, 0);
+  const intervalMs = Math.max(opts.intervalMs ?? DEFAULT_POLL_INTERVAL_MS, 1);
+  const sigtermTimeoutMs = Math.min(Math.max(opts.sigtermTimeoutMs ?? 600, 0), timeoutMs);
+  const platform = opts.platform ?? process.platform;
+
+  const { lockPath } = resolveGatewayLockPath(env);
+  const payload = await readLockPayload(lockPath);
+  const ownerPid = payload?.pid;
+  if (!ownerPid) {
+    const existed = payload !== null;
+    if (existed) {
+      await fs.rm(lockPath, { force: true });
+    }
+    return {
+      lockPath,
+      removedLock: existed,
+      waitedMs: 0,
+      escalatedToSigkill: false,
+    };
+  }
+
+  const ownerStatus = resolveGatewayOwnerStatus(ownerPid, payload, platform);
+  if (ownerStatus === "dead") {
+    await fs.rm(lockPath, { force: true });
+    return { lockPath, ownerPid, removedLock: true, waitedMs: 0, escalatedToSigkill: false };
+  }
+  // When we can't inspect /proc (common under tightened policies), we still want `--force`
+  // to be able to clear a lock created by OpenClaw for this config.
+  if (ownerStatus === "unknown") {
+    // fall through to kill attempts below
+  } else if (ownerStatus !== "alive") {
+    return { lockPath, ownerPid, removedLock: false, waitedMs: 0, escalatedToSigkill: false };
+  }
+  if (ownerPid === process.pid) {
+    return { lockPath, ownerPid, removedLock: false, waitedMs: 0, escalatedToSigkill: false };
+  }
+
+  try {
+    process.kill(ownerPid, "SIGTERM");
+  } catch (err) {
+    throw new Error(`failed to SIGTERM gateway lock owner pid ${ownerPid}: ${String(err)}`, {
+      cause: err,
+    });
+  }
+
+  let waitedMs = 0;
+  const triesSigterm = intervalMs > 0 ? Math.ceil(sigtermTimeoutMs / intervalMs) : 0;
+  for (let i = 0; i < triesSigterm; i++) {
+    if (!isAlive(ownerPid)) {
+      await fs.rm(lockPath, { force: true });
+      return { lockPath, ownerPid, removedLock: true, waitedMs, escalatedToSigkill: false };
+    }
+    await new Promise((r) => setTimeout(r, intervalMs));
+    waitedMs += intervalMs;
+  }
+
+  if (!isAlive(ownerPid)) {
+    await fs.rm(lockPath, { force: true });
+    return { lockPath, ownerPid, removedLock: true, waitedMs, escalatedToSigkill: false };
+  }
+
+  try {
+    process.kill(ownerPid, "SIGKILL");
+  } catch (err) {
+    throw new Error(`failed to SIGKILL gateway lock owner pid ${ownerPid}: ${String(err)}`, {
+      cause: err,
+    });
+  }
+
+  const remainingBudget = Math.max(timeoutMs - waitedMs, 0);
+  const triesSigkill = intervalMs > 0 ? Math.ceil(remainingBudget / intervalMs) : 0;
+  for (let i = 0; i < triesSigkill; i++) {
+    if (!isAlive(ownerPid)) {
+      await fs.rm(lockPath, { force: true });
+      return { lockPath, ownerPid, removedLock: true, waitedMs, escalatedToSigkill: true };
+    }
+    await new Promise((r) => setTimeout(r, intervalMs));
+    waitedMs += intervalMs;
+  }
+
+  if (!isAlive(ownerPid)) {
+    await fs.rm(lockPath, { force: true });
+    return { lockPath, ownerPid, removedLock: true, waitedMs, escalatedToSigkill: true };
+  }
+
+  throw new Error(
+    `gateway lock owner pid ${ownerPid} still alive after force release (lock at ${lockPath})`,
+  );
+}
+
 export async function acquireGatewayLock(
   opts: GatewayLockOptions = {},
 ): Promise<GatewayLockHandle | null> {

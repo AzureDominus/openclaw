@@ -236,7 +236,9 @@ export async function monitorWebChannel(
         "web reconnect: initial connection failed",
       );
 
-      if (stopRequested() || sigintStop) break;
+      if (stopRequested() || sigintStop) {
+        break;
+      }
       if (reconnectPolicy.maxAttempts > 0 && reconnectAttempts >= reconnectPolicy.maxAttempts) {
         reconnectLogger.error(
           { connectionId, reconnectAttempts, maxAttempts: reconnectPolicy.maxAttempts },

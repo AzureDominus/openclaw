@@ -14,14 +14,14 @@ import { startGatewayServer } from "../../gateway/server.js";
 import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setGatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setVerbose } from "../../globals.js";
-import { GatewayLockError } from "../../infra/gateway-lock.js";
+import { forceReleaseGatewayLockAndWait, GatewayLockError } from "../../infra/gateway-lock.js";
 import { formatPortDiagnostics, inspectPortUsage } from "../../infra/ports.js";
 import { setConsoleSubsystemFilter, setConsoleTimestampPrefix } from "../../logging/console.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
 import { inheritOptionFromParent } from "../command-options.js";
-import { forceFreePortAndWait } from "../ports.js";
+import { forceFreePortAndWait, forceKillOpenclawGatewayProcessesAndWait } from "../ports.js";
 import { ensureDevGatewayConfig } from "./dev.js";
 import { runGatewayLoop } from "./run-loop.js";
 import {
@@ -152,6 +152,27 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   }
   if (opts.force) {
     try {
+      const lockRelease = await forceReleaseGatewayLockAndWait({
+        timeoutMs: 2000,
+        intervalMs: 100,
+        sigtermTimeoutMs: 700,
+      });
+      if (lockRelease.removedLock && lockRelease.ownerPid) {
+        gatewayLog.info(`force: released gateway lock (pid ${lockRelease.ownerPid})`);
+        if (lockRelease.escalatedToSigkill) {
+          gatewayLog.info(
+            `force: escalated to SIGKILL while releasing lock (pid ${lockRelease.ownerPid})`,
+          );
+        }
+        if (lockRelease.waitedMs > 0) {
+          gatewayLog.info(
+            `force: waited ${lockRelease.waitedMs}ms for lock owner to exit (pid ${lockRelease.ownerPid})`,
+          );
+        }
+      } else if (lockRelease.removedLock) {
+        gatewayLog.info("force: removed invalid/stale gateway lock");
+      }
+
       const { killed, waitedMs, escalatedToSigkill } = await forceFreePortAndWait(port, {
         timeoutMs: 2000,
         intervalMs: 100,
@@ -170,6 +191,20 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
         }
         if (waitedMs > 0) {
           gatewayLog.info(`force: waited ${waitedMs}ms for port ${port} to free`);
+        }
+      }
+
+      // If the port is still busy but process inspection is blocked (common under tightened /proc policies),
+      // fall back to killing stray `openclaw-gateway` processes owned by this user.
+      const portStatus = await inspectPortUsage(port);
+      if (portStatus.status === "busy") {
+        const res = await forceKillOpenclawGatewayProcessesAndWait({
+          timeoutMs: 2000,
+          intervalMs: 100,
+          sigtermTimeoutMs: 700,
+        });
+        if (res.killed.length > 0) {
+          gatewayLog.info(`force: killed ${res.killed.length} stale openclaw-gateway process(es)`);
         }
       }
     } catch (err) {
