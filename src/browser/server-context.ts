@@ -263,16 +263,19 @@ function createProfileContext(
 
   const attachRunning = (running: NonNullable<ProfileRuntimeState["running"]>) => {
     setProfileRunning(running);
-    running.proc.on("exit", () => {
-      // Guard against server teardown (e.g., SIGUSR1 restart)
-      if (!opts.getState()) {
-        return;
-      }
-      const profileState = getProfileState();
-      if (profileState.running?.pid === running.pid) {
-        setProfileRunning(null);
-      }
-    });
+    // Only attach exit handler if we have a child process handle (spawn-based launch)
+    if (running.proc) {
+      running.proc.on("exit", () => {
+        // Guard against server teardown (e.g., SIGUSR1 restart)
+        if (!opts.getState()) {
+          return;
+        }
+        const profileState = getProfileState();
+        if (profileState.running?.pid === running.pid) {
+          setProfileRunning(null);
+        }
+      });
+    }
   };
 
   const ensureBrowserAvailable = async (): Promise<void> => {

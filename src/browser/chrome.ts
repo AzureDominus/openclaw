@@ -1,3 +1,4 @@
+import type { BrowserContext } from "playwright-core";
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -46,13 +47,102 @@ function exists(filePath: string) {
   }
 }
 
+function resolveXdgRuntimeDir(): string | undefined {
+  const current = process.env.XDG_RUNTIME_DIR?.trim();
+  if (current) {
+    return current;
+  }
+  if (typeof process.getuid !== "function") {
+    return undefined;
+  }
+  const uid = process.getuid();
+  if (!Number.isFinite(uid)) {
+    return undefined;
+  }
+  const candidate = `/run/user/${uid}`;
+  return exists(candidate) ? candidate : undefined;
+}
+
+function resolveDisplay(): string | undefined {
+  const override = process.env.OPENCLAW_BROWSER_DISPLAY?.trim();
+  if (override) {
+    return override;
+  }
+  const current = process.env.DISPLAY?.trim();
+  if (current) {
+    return current;
+  }
+
+  // Best-effort for headful daemon environments: detect a local X11 socket.
+  // Commonly this is created by Xvfb/Xorg. Example: /tmp/.X11-unix/X1 => DISPLAY=:1
+  if (process.platform === "linux") {
+    const dir = "/tmp/.X11-unix";
+    if (!exists(dir)) {
+      return undefined;
+    }
+    try {
+      const entries = fs.readdirSync(dir);
+      const nums: number[] = [];
+      for (const entry of entries) {
+        const m = /^X(\d+)$/.exec(entry);
+        if (!m) {
+          continue;
+        }
+        const n = Number.parseInt(m[1] ?? "", 10);
+        if (Number.isFinite(n)) {
+          nums.push(n);
+        }
+      }
+      if (nums.includes(1)) {
+        return ":1";
+      }
+      if (nums.length) {
+        nums.sort((a, b) => a - b);
+        return `:${nums[0]}`;
+      }
+    } catch {
+      return undefined;
+    }
+  }
+
+  return undefined;
+}
+
+function buildBrowserEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    // Reduce accidental sharing with the user's env.
+    HOME: os.homedir(),
+  };
+  const display = resolveDisplay();
+  if (display) {
+    env.DISPLAY = display;
+  }
+  const xdg = resolveXdgRuntimeDir();
+  if (xdg) {
+    env.XDG_RUNTIME_DIR = xdg;
+  }
+  return env;
+}
+
+/**
+ * Represents a running Chrome instance launched by OpenClaw.
+ * Can be either spawn-based (proc defined) or playwright-based (pwContext defined).
+ */
 export type RunningChrome = {
   pid: number;
   exe: BrowserExecutable;
   userDataDir: string;
   cdpPort: number;
   startedAt: number;
-  proc: ChildProcessWithoutNullStreams;
+  /** Launcher type: "spawn" for child_process, "playwright" for persistent context */
+  launcher: "spawn" | "playwright";
+  /** Child process handle when launcher="spawn" */
+  proc?: ChildProcessWithoutNullStreams;
+  /** Playwright persistent context when launcher="playwright" */
+  pwContext?: BrowserContext;
+  /** Async stop function for graceful shutdown */
+  stop?: () => Promise<void>;
 };
 
 function resolveBrowserExecutable(resolved: ResolvedBrowserConfig): BrowserExecutable | null {
@@ -185,11 +275,10 @@ export async function launchOpenClawChrome(
     (profile.color ?? DEFAULT_OPENCLAW_BROWSER_COLOR).toUpperCase(),
   );
 
-  // First launch to create preference files if missing, then decorate and relaunch.
-  const spawnOnce = () => {
+  // Build args shared between spawn and playwright launches
+  const buildArgs = (): string[] => {
     const args: string[] = [
       `--remote-debugging-port=${profile.cdpPort}`,
-      `--user-data-dir=${userDataDir}`,
       "--no-first-run",
       "--no-default-browser-check",
       "--disable-sync",
@@ -202,7 +291,6 @@ export async function launchOpenClawChrome(
     ];
 
     if (resolved.headless) {
-      // Best-effort; older Chromes may ignore.
       args.push("--headless=new");
       args.push("--disable-gpu");
     }
@@ -221,19 +309,31 @@ export async function launchOpenClawChrome(
     if (resolved.extraArgs.length > 0) {
       args.push(...resolved.extraArgs);
     }
+    return args;
+  };
 
+  // First launch to create preference files if missing, then decorate and relaunch.
+  const spawnOnce = () => {
+    const args = buildArgs();
+    args.push(`--user-data-dir=${userDataDir}`);
     // Always open a blank tab to ensure a target exists.
     args.push("about:blank");
 
     return spawn(exe.path, args, {
       stdio: "pipe",
-      env: {
-        ...process.env,
-        // Reduce accidental sharing with the user's env.
-        HOME: os.homedir(),
-      },
+      env: buildBrowserEnv(),
     });
   };
+
+  if (!resolved.headless) {
+    const display = resolveDisplay();
+    if (!display) {
+      throw new Error(
+        "Browser is configured headful (browser.headless=false) but no DISPLAY is available. " +
+          "Set DISPLAY (or OPENCLAW_BROWSER_DISPLAY) to the X server used by your VNC session.",
+      );
+    }
+  }
 
   const startedAt = Date.now();
 
@@ -284,6 +384,18 @@ export async function launchOpenClawChrome(
     log.warn(`openclaw browser clean-exit prefs failed: ${String(err)}`);
   }
 
+  // Try playwright-based launch first for better automation capabilities
+  try {
+    const result = await launchViaPlaywright(exe, userDataDir, profile, resolved, buildArgs());
+    log.info(
+      `🦞 openclaw browser started [playwright] (${exe.kind}) profile "${profile.name}" on 127.0.0.1:${profile.cdpPort} (pid ${result.pid})`,
+    );
+    return { ...result, startedAt };
+  } catch (err) {
+    log.debug(`Playwright launch failed, falling back to spawn: ${String(err)}`);
+  }
+
+  // Fallback to spawn-based launch
   const proc = spawnOnce();
   // Wait for CDP to come up.
   const readyDeadline = Date.now() + 15_000;
@@ -307,7 +419,7 @@ export async function launchOpenClawChrome(
 
   const pid = proc.pid ?? -1;
   log.info(
-    `🦞 openclaw browser started (${exe.kind}) profile "${profile.name}" on 127.0.0.1:${profile.cdpPort} (pid ${pid})`,
+    `🦞 openclaw browser started [spawn] (${exe.kind}) profile "${profile.name}" on 127.0.0.1:${profile.cdpPort} (pid ${pid})`,
   );
 
   return {
@@ -316,13 +428,113 @@ export async function launchOpenClawChrome(
     userDataDir,
     cdpPort: profile.cdpPort,
     startedAt,
+    launcher: "spawn",
     proc,
   };
 }
 
+/**
+ * Launch browser using Playwright's persistent context for better automation.
+ * This provides improved stealth and stability compared to raw spawn.
+ */
+async function launchViaPlaywright(
+  exe: BrowserExecutable,
+  userDataDir: string,
+  profile: ResolvedBrowserProfile,
+  resolved: ResolvedBrowserConfig,
+  baseArgs: string[],
+): Promise<Omit<RunningChrome, "startedAt">> {
+  const { chromium } = await import("playwright-core");
+
+  const pwContext = await chromium.launchPersistentContext(userDataDir, {
+    executablePath: exe.path,
+    args: baseArgs,
+    headless: resolved.headless ?? false,
+    env: buildBrowserEnv(),
+    // Drop obvious automation leaks.
+    // Note: we keep Playwright's --remote-debugging-pipe so Playwright can control the browser,
+    // while ALSO passing --remote-debugging-port=... so OpenClaw can attach over CDP.
+    ignoreDefaultArgs: ["--enable-automation"],
+  });
+
+  // Wait for CDP to become reachable
+  const readyDeadline = Date.now() + 15_000;
+  while (Date.now() < readyDeadline) {
+    if (await isChromeReachable(profile.cdpUrl, 500)) {
+      break;
+    }
+    await new Promise((r) => setTimeout(r, 200));
+  }
+
+  if (!(await isChromeReachable(profile.cdpUrl, 500))) {
+    await pwContext.close().catch(() => {});
+    throw new Error(
+      `Failed to start Chrome CDP on port ${profile.cdpPort} for profile "${profile.name}" via Playwright.`,
+    );
+  }
+
+  // Get PID from the browser process
+  const browser = pwContext.browser();
+  // Playwright doesn't expose PID directly; we'll extract it from the process if available
+  // Use -1 as fallback since we can't reliably get it
+  const pid = (browser as unknown as { _process?: { pid?: number } })?._process?.pid ?? -1;
+
+  // Build an async stop function for graceful shutdown
+  const stop = async () => {
+    await pwContext.close().catch(() => {});
+  };
+
+  return {
+    pid,
+    exe,
+    userDataDir,
+    cdpPort: profile.cdpPort,
+    launcher: "playwright",
+    pwContext,
+    stop,
+  };
+}
+
 export async function stopOpenClawChrome(running: RunningChrome, timeoutMs = 2500) {
+  // Handle playwright-based launch
+  if (running.launcher === "playwright") {
+    // Try graceful stop first
+    if (running.stop) {
+      try {
+        await running.stop();
+      } catch {
+        // ignore
+      }
+    } else if (running.pwContext) {
+      try {
+        await running.pwContext.close();
+      } catch {
+        // ignore
+      }
+    }
+
+    // Fallback: if CDP port is still reachable after timeout, we can't force-kill
+    // since we don't have a process handle. Log a warning.
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      if (!(await isChromeReachable(cdpUrlForPort(running.cdpPort), 200))) {
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 100));
+    }
+
+    // If still reachable, log warning - we don't have SIGKILL capability for playwright
+    if (await isChromeReachable(cdpUrlForPort(running.cdpPort), 200)) {
+      log.warn(
+        `Playwright-launched browser for profile on port ${running.cdpPort} did not stop gracefully.`,
+      );
+    }
+    return;
+  }
+
+  // Handle spawn-based launch
   const proc = running.proc;
-  if (proc.killed) {
+  if (!proc || proc.killed) {
     return;
   }
   try {
