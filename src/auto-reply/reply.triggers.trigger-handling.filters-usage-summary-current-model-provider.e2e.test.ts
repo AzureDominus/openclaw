@@ -117,13 +117,42 @@ describe("trigger handling", () => {
     });
   });
 
-  it("cycles /usage modes and persists to the session store", async () => {
+  it("shows provider quota by default for /usage", async () => {
+    await withTempHome(async (home) => {
+      usageMocks.loadProviderUsageSummary.mockClear();
+      usageMocks.formatUsageWindowSummary.mockClear();
+      usageMocks.loadProviderUsageSummary.mockResolvedValue({
+        updatedAt: 0,
+        providers: [
+          {
+            provider: "anthropic",
+            displayName: "Claude",
+            windows: [{ label: "5h", usedPercent: 20 }],
+          },
+        ],
+      });
+      usageMocks.formatUsageWindowSummary.mockReturnValue("5h 80% left");
+
+      const { blockReplies, replies } = await runCommandAndCollectReplies({
+        home,
+        body: "/usage",
+      });
+      expect(blockReplies.length).toBe(0);
+      expect(replies.length).toBe(1);
+      const text = String(replies[0]?.text ?? "");
+      expect(text).toContain("📊 Usage");
+      expect(text).toContain("Provider quota (Claude) 5h 80% left");
+      expect(text).toContain("Footer mode: off");
+    });
+  });
+
+  it("cycles /usage modes via /usage next and persists to the session store", async () => {
     await withTempHome(async (home) => {
       const cfg = makeCfg(home);
 
       const r1 = await getReplyFromConfig(
         {
-          Body: "/usage",
+          Body: "/usage next",
           From: "+1000",
           To: "+2000",
           Provider: "whatsapp",
@@ -141,7 +170,7 @@ describe("trigger handling", () => {
 
       const r2 = await getReplyFromConfig(
         {
-          Body: "/usage",
+          Body: "/usage next",
           From: "+1000",
           To: "+2000",
           Provider: "whatsapp",
@@ -159,7 +188,7 @@ describe("trigger handling", () => {
 
       const r3 = await getReplyFromConfig(
         {
-          Body: "/usage",
+          Body: "/usage next",
           From: "+1000",
           To: "+2000",
           Provider: "whatsapp",
@@ -202,6 +231,41 @@ describe("trigger handling", () => {
       expect(pickFirstStoreEntry<{ responseUsage?: string }>(store)?.responseUsage).toBe("tokens");
 
       expect(getRunEmbeddedPiAgentMock()).not.toHaveBeenCalled();
+    });
+  });
+
+  it("returns rolling windows and provider quota for /usage cost", async () => {
+    await withTempHome(async (home) => {
+      usageMocks.loadProviderUsageSummary.mockClear();
+      usageMocks.formatUsageWindowSummary.mockClear();
+      usageMocks.loadProviderUsageSummary.mockResolvedValue({
+        updatedAt: 0,
+        providers: [
+          {
+            provider: "anthropic",
+            displayName: "Claude",
+            windows: [{ label: "5h", usedPercent: 20 }],
+          },
+        ],
+      });
+      usageMocks.formatUsageWindowSummary.mockReturnValue("5h 80% left");
+
+      const { blockReplies, replies } = await runCommandAndCollectReplies({
+        home,
+        body: "/usage cost",
+      });
+      expect(blockReplies.length).toBe(0);
+      expect(replies.length).toBe(1);
+
+      const text = String(replies[0]?.text ?? "");
+      expect(text).toContain("💸 Usage cost");
+      expect(text).toContain("Last 24h");
+      expect(text).toContain("Last 7d");
+      expect(text).toContain("Last 30d");
+      expect(text).toContain("Provider quota (Claude) 5h 80% left");
+      expect(usageMocks.loadProviderUsageSummary).toHaveBeenCalledWith(
+        expect.objectContaining({ providers: ["anthropic"] }),
+      );
     });
   });
   it("sends one inline status and still returns agent reply for mixed text", async () => {
