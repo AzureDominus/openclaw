@@ -1,8 +1,9 @@
 import { Type } from "@sinclair/typebox";
+import type { OpenClawConfig } from "../../config/config.js";
+import type { AnyAgentTool } from "./common.js";
 import { normalizeGroupActivation } from "../../auto-reply/group-activation.js";
 import { getFollowupQueueDepth, resolveQueueSettings } from "../../auto-reply/reply/queue.js";
 import { buildStatusMessage } from "../../auto-reply/status.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import {
   loadSessionStore,
@@ -33,7 +34,6 @@ import {
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "../model-selection.js";
-import type { AnyAgentTool } from "./common.js";
 import { readStringParam } from "./common.js";
 import {
   shouldResolveSessionIdInput,
@@ -180,7 +180,7 @@ export function createSessionStatusTool(opts?: {
     label: "Session Status",
     name: "session_status",
     description:
-      "Show a /status-equivalent session status card (usage + time + cost when available). Use for model-use questions (📊 session_status). Optional: set per-session model override (model=default resets overrides).",
+      "Show a /status-equivalent session status card (usage + time + cost when available). Use for model-use questions (session_status). Optional: set per-session model override (model=default resets overrides).",
     parameters: SessionStatusToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -307,13 +307,17 @@ export function createSessionStatusTool(opts?: {
           });
           const snapshot = usageSummary.providers.find((entry) => entry.provider === usageProvider);
           if (snapshot) {
-            const formatted = formatUsageWindowSummary(snapshot, {
-              now: Date.now(),
-              maxWindows: 2,
-              includeResets: true,
-            });
-            if (formatted && !formatted.startsWith("error:")) {
-              usageLine = `📊 Usage: ${formatted}`;
+            if (snapshot.error) {
+              usageLine = `Usage (${snapshot.displayName}): unavailable (${snapshot.error})`;
+            } else {
+              const formatted = formatUsageWindowSummary(snapshot, {
+                now: Date.now(),
+                maxWindows: 2,
+                includeResets: true,
+              });
+              if (formatted) {
+                usageLine = `Usage (${snapshot.displayName}): ${formatted}`;
+              }
             }
           }
         } catch {
