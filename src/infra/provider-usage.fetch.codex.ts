@@ -1,6 +1,6 @@
 import { buildUsageHttpErrorSnapshot, fetchJson } from "./provider-usage.fetch.shared.js";
-import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
 import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
+import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
 
 type CodexUsageResponse = {
   rate_limit?: {
@@ -20,6 +20,28 @@ type CodexUsageResponse = {
 };
 
 const WEEKLY_RESET_GAP_SECONDS = 3 * 24 * 60 * 60;
+
+function formatWindowLabel(limitWindowSeconds: number): string {
+  if (!Number.isFinite(limitWindowSeconds) || limitWindowSeconds <= 0) {
+    return "Window";
+  }
+
+  const seconds = Math.round(limitWindowSeconds);
+  const day = 86_400;
+  const hour = 3_600;
+  const minute = 60;
+
+  if (seconds % day === 0) {
+    return `${seconds / day}d`;
+  }
+  if (seconds % hour === 0) {
+    return `${seconds / hour}h`;
+  }
+  if (seconds % minute === 0) {
+    return `${seconds / minute}m`;
+  }
+  return `${seconds}s`;
+}
 
 function resolveSecondaryWindowLabel(params: {
   windowHours: number;
@@ -79,9 +101,9 @@ export async function fetchCodexUsage(
 
   if (data.rate_limit?.primary_window) {
     const pw = data.rate_limit.primary_window;
-    const windowHours = Math.round((pw.limit_window_seconds || 10800) / 3600);
+    const limitWindowSeconds = pw.limit_window_seconds || 10_800;
     windows.push({
-      label: `${windowHours}h`,
+      label: formatWindowLabel(limitWindowSeconds),
       usedPercent: clampPercent(pw.used_percent || 0),
       resetAt: pw.reset_at ? pw.reset_at * 1000 : undefined,
     });
@@ -89,7 +111,8 @@ export async function fetchCodexUsage(
 
   if (data.rate_limit?.secondary_window) {
     const sw = data.rate_limit.secondary_window;
-    const windowHours = Math.round((sw.limit_window_seconds || 86400) / 3600);
+    const limitWindowSeconds = sw.limit_window_seconds || 86_400;
+    const windowHours = Math.round(limitWindowSeconds / 3600);
     const label = resolveSecondaryWindowLabel({
       windowHours,
       primaryResetAt: data.rate_limit?.primary_window?.reset_at,
