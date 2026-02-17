@@ -51,7 +51,51 @@ describe("fetchCodexUsage", () => {
     expect(result.plan).toBe("Plus ($12.50)");
     expect(result.windows).toEqual([
       { label: "3h", usedPercent: 35.5, resetAt: 1_700_000_000_000 },
-      { label: "Day", usedPercent: 75, resetAt: 1_700_050_000_000 },
+      { label: "1d", usedPercent: 75, resetAt: 1_700_050_000_000 },
+    ]);
+  });
+
+  it("labels rate-limit windows from their true durations", async () => {
+    const mockFetch = createProviderUsageFetch(async () =>
+      makeResponse(200, {
+        rate_limit: {
+          primary_window: {
+            limit_window_seconds: 10_800,
+            used_percent: 25,
+            reset_at: 1_763_000_000,
+          },
+          secondary_window: {
+            limit_window_seconds: 604_800,
+            used_percent: 80,
+            reset_at: 1_763_500_000,
+          },
+        },
+      }),
+    );
+
+    const snapshot = await fetchCodexUsage("token", undefined, 500, mockFetch);
+
+    expect(snapshot.windows).toEqual([
+      { label: "3h", usedPercent: 25, resetAt: 1_763_000_000_000 },
+      { label: "7d", usedPercent: 80, resetAt: 1_763_500_000_000 },
+    ]);
+  });
+
+  it("uses fallback window durations when the API omits limit_window_seconds", async () => {
+    const mockFetch = createProviderUsageFetch(async () =>
+      makeResponse(200, {
+        rate_limit: {
+          primary_window: { used_percent: 10 },
+          secondary_window: { used_percent: 20 },
+        },
+      }),
+    );
+
+    const snapshot = await fetchCodexUsage("token", undefined, 500, mockFetch);
+
+    expect(snapshot.windows).toEqual([
+      { label: "3h", usedPercent: 10, resetAt: undefined },
+      { label: "1d", usedPercent: 20, resetAt: undefined },
     ]);
   });
 });
