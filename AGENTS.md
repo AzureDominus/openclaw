@@ -138,7 +138,7 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 
 ## Git
 
-- Commit via `scripts/committer "<msg>" <file...>`; stage intended files only. It formats staged files; still run gates.
+- Stage intended files only. Run formatting and gates explicitly before handoff.
 - Commits: conventional-ish, concise, grouped.
 - No manual stash/autostash unless explicit. No branch/worktree changes unless requested.
 - `main`: no merge commits; rebase on latest `origin/main` before push. Do not
