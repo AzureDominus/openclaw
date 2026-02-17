@@ -94,6 +94,9 @@
 - Framework: Vitest with V8 coverage thresholds (70% lines/branches/functions/statements).
 - Naming: match source names with `*.test.ts`; e2e in `*.e2e.test.ts`.
 - Run `pnpm test` (or `pnpm test:coverage`) before pushing when you touch logic.
+- `pnpm test:e2e` runs the full e2e suite (very large). For a single e2e file, run:
+  `pnpm exec vitest run --config vitest.e2e.config.ts <path-to-file.e2e.test.ts>`
+  to avoid unintentionally running everything.
 - Do not set test workers above 16; tried already.
 - If local Vitest runs cause memory pressure (common on non-Mac-Studio hosts), use `OPENCLAW_TEST_PROFILE=low OPENCLAW_TEST_SERIAL_GATEWAY=1 pnpm test` for land/gate runs.
 - Live tests (real keys): `CLAWDBOT_LIVE_TEST=1 pnpm test:live` (OpenClaw-only) or `LIVE=1 pnpm test:live` (includes provider live tests). Docker: `pnpm test:docker:live-models`, `pnpm test:docker:live-gateway`. Onboarding Docker E2E: `pnpm test:docker:onboard`.
@@ -156,6 +159,18 @@
 ## Troubleshooting
 
 - Rebrand/migration issues or legacy config/service warnings: run `openclaw doctor` (see `docs/gateway/doctor.md`).
+
+## Fork Sync + Restart (User Systemd)
+
+- Standard fork update flow (rebase onto upstream + restart gateway):
+  1. `git fetch upstream --prune`
+  2. `git rebase upstream/main` (resolve conflicts, then `git rebase --continue`)
+  3. `pnpm build`
+  4. `systemctl --user restart openclaw-gateway.service`
+  5. Verify:
+     `systemctl --user --no-pager --full status openclaw-gateway.service | sed -n '1,80p'`
+  6. Push rebased branch to fork:
+     `git push --force-with-lease origin main`
 
 ## Agent-Specific Notes
 
