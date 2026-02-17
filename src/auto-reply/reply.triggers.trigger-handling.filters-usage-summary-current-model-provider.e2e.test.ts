@@ -140,9 +140,11 @@ describe("trigger handling", () => {
       expect(blockReplies.length).toBe(0);
       expect(replies.length).toBe(1);
       const text = String(replies[0]?.text ?? "");
-      expect(text).toContain("📊 Usage");
-      expect(text).toContain("Provider quota (Claude) 5h 80% left");
-      expect(text).toContain("Footer mode: off");
+      expect(text).toContain("Usage");
+      expect(text).toContain("provider: Claude");
+      expect(text).toContain("5h limit:");
+      expect(text).toContain("80% left");
+      expect(text).toContain("footer: off");
     });
   });
 
@@ -258,11 +260,12 @@ describe("trigger handling", () => {
       expect(replies.length).toBe(1);
 
       const text = String(replies[0]?.text ?? "");
-      expect(text).toContain("💸 Usage cost");
-      expect(text).toContain("Last 24h");
-      expect(text).toContain("Last 7d");
-      expect(text).toContain("Last 30d");
-      expect(text).toContain("Provider quota (Claude) 5h 80% left");
+      expect(text).toContain("Usage cost");
+      expect(text).toContain("24h:");
+      expect(text).toContain("7d:");
+      expect(text).toContain("30d:");
+      expect(text).toContain("provider: Claude");
+      expect(text).toContain("quota: 5h 80% left");
       expect(usageMocks.loadProviderUsageSummary).toHaveBeenCalledWith(
         expect.objectContaining({ providers: ["anthropic"] }),
       );

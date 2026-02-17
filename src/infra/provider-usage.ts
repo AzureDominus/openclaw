@@ -1,4 +1,5 @@
 export {
+  formatUsageWindowBars,
   formatUsageReportLines,
   formatUsageSummaryLine,
   formatUsageWindowSummary,
