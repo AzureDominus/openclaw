@@ -1,5 +1,5 @@
-import { clampPercent } from "./provider-usage.shared.js";
 import type { ProviderUsageSnapshot, UsageSummary, UsageWindow } from "./provider-usage.types.js";
+import { clampPercent } from "./provider-usage.shared.js";
 
 function formatResetRemaining(targetMs?: number, now?: number): string | null {
   if (!targetMs) {
@@ -33,11 +33,90 @@ function formatResetRemaining(targetMs?: number, now?: number): string | null {
   }).format(new Date(targetMs));
 }
 
+function pickPrimaryWindow(windows: UsageWindow[]): UsageWindow | undefined {
+  if (windows.length === 0) {
+    return undefined;
+  }
+  return windows.reduce((best, next) => (next.usedPercent > best.usedPercent ? next : best));
+}
+
 function formatWindowShort(window: UsageWindow, now?: number): string {
   const remaining = clampPercent(100 - window.usedPercent);
   const reset = formatResetRemaining(window.resetAt, now);
-  const resetSuffix = reset ? ` ⏱${reset}` : "";
+  const resetSuffix = reset ? `, resets ${reset}` : "";
   return `${remaining.toFixed(0)}% left (${window.label}${resetSuffix})`;
+}
+
+function formatUsageWindowLabel(label: string): string {
+  const normalized = label.trim().toLowerCase();
+  if (!normalized) {
+    return "limit";
+  }
+  if (normalized === "week" || normalized === "weekly" || normalized === "7d") {
+    return "weekly limit";
+  }
+  if (
+    normalized === "day" ||
+    normalized === "daily" ||
+    normalized === "1d" ||
+    normalized === "24h"
+  ) {
+    return "daily limit";
+  }
+  return `${label} limit`;
+}
+
+function formatUsageResetTime(resetAt: number, nowMs: number): string {
+  const time = new Intl.DateTimeFormat("en-GB", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(new Date(resetAt));
+  const sameDay = new Date(resetAt).toLocaleDateString() === new Date(nowMs).toLocaleDateString();
+  if (sameDay) {
+    return time;
+  }
+  const day = new Intl.DateTimeFormat("en-GB", {
+    day: "numeric",
+    month: "short",
+  }).format(new Date(resetAt));
+  return `${time} on ${day}`;
+}
+
+function renderUsageBar(remainingPercent: number, width = 20): string {
+  const clamped = clampPercent(remainingPercent);
+  const filled = Math.max(0, Math.min(width, Math.round((clamped / 100) * width)));
+  return `[${"█".repeat(filled)}${"░".repeat(width - filled)}]`;
+}
+
+export function formatUsageWindowBars(
+  snapshot: ProviderUsageSnapshot,
+  opts?: { now?: number; maxWindows?: number; includeResets?: boolean; barWidth?: number },
+): string[] {
+  if (snapshot.error || snapshot.windows.length === 0) {
+    return [];
+  }
+
+  const now = opts?.now ?? Date.now();
+  const maxWindows =
+    typeof opts?.maxWindows === "number" && opts.maxWindows > 0
+      ? Math.min(opts.maxWindows, snapshot.windows.length)
+      : snapshot.windows.length;
+  const includeResets = opts?.includeResets ?? true;
+  const barWidth =
+    typeof opts?.barWidth === "number" && opts.barWidth > 0 ? Math.round(opts.barWidth) : 20;
+  const windows = snapshot.windows.slice(0, maxWindows);
+  const labeled = windows.map((window) => ({
+    title: `${formatUsageWindowLabel(window.label)}:`,
+    remaining: clampPercent(100 - window.usedPercent),
+    resetAt: window.resetAt,
+  }));
+  const labelWidth = Math.max(...labeled.map((entry) => entry.title.length));
+  return labeled.map((entry) => {
+    const resetSuffix =
+      includeResets && entry.resetAt ? ` (resets ${formatUsageResetTime(entry.resetAt, now)})` : "";
+    return `${entry.title.padEnd(labelWidth)} ${renderUsageBar(entry.remaining, barWidth)} ${entry.remaining.toFixed(0)}% left${resetSuffix}`;
+  });
 }
 
 export function formatUsageWindowSummary(
@@ -60,7 +139,7 @@ export function formatUsageWindowSummary(
   const parts = windows.map((window) => {
     const remaining = clampPercent(100 - window.usedPercent);
     const reset = includeResets ? formatResetRemaining(window.resetAt, now) : null;
-    const resetSuffix = reset ? ` ⏱${reset}` : "";
+    const resetSuffix = reset ? ` (resets ${reset})` : "";
     return `${window.label} ${remaining.toFixed(0)}% left${resetSuffix}`;
   });
   return parts.join(" · ");
@@ -77,13 +156,20 @@ export function formatUsageSummaryLine(
     return null;
   }
 
-  const parts = providers.map((entry) => {
-    const window = entry.windows.reduce((best, next) =>
-      next.usedPercent > best.usedPercent ? next : best,
-    );
-    return `${entry.displayName} ${formatWindowShort(window, opts?.now)}`;
-  });
-  return `📊 Usage: ${parts.join(" · ")}`;
+  const parts = providers
+    .map((entry) => {
+      const window = pickPrimaryWindow(entry.windows);
+      if (!window) {
+        return null;
+      }
+      return `${entry.displayName} ${formatWindowShort(window, opts?.now)}`;
+    })
+    .filter(Boolean) as string[];
+
+  if (parts.length === 0) {
+    return null;
+  }
+  return `Usage: ${parts.join(" · ")}`;
 }
 
 export function formatUsageReportLines(summary: UsageSummary, opts?: { now?: number }): string[] {
