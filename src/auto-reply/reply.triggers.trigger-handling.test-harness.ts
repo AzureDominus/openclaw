@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, vi } from "vitest";
-import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 
 // Avoid exporting vitest mock types (TS2742 under pnpm + d.ts emit).
 // oxlint-disable-next-line typescript/no-explicit-any
@@ -54,6 +54,7 @@ const providerUsageMocks = vi.hoisted(() => ({
   }),
   formatUsageSummaryLine: vi.fn().mockReturnValue("📊 Usage: Claude 80% left"),
   formatUsageWindowSummary: vi.fn().mockReturnValue("Claude 80% left"),
+  formatUsageWindowBars: vi.fn().mockReturnValue(["5h limit: [████████████████░░░░] 80% left"]),
   resolveUsageProviderId: vi.fn((provider: string) => provider.split("/")[0]),
 }));
 

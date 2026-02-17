@@ -12,6 +12,7 @@ import {
 import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import {
+  formatUsageWindowBars,
   formatUsageWindowSummary,
   loadProviderUsageSummary,
   resolveUsageProviderId,
@@ -33,6 +34,12 @@ import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
 import { clearSessionQueues } from "./queue.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+type ProviderUsageDisplay = {
+  provider: string;
+  quotaSummary: string;
+  quotaLines: string[];
+};
 
 function summarizeRecentCostWindow(
   summary: Awaited<ReturnType<typeof loadCostUsageSummary>>,
@@ -67,14 +74,14 @@ function formatCostWindowLine(
   const cost = formatUsd(window.totalCost);
   const partial = window.missingCostEntries > 0 ? " (partial)" : "";
   const tokenPart =
-    window.totalTokens > 0 ? ` · ${formatTokenCount(window.totalTokens)} tokens` : "";
-  return `${label} ${cost ?? "n/a"}${partial}${tokenPart}`;
+    window.totalTokens > 0 ? `, ${formatTokenCount(window.totalTokens)} tokens` : "";
+  return `${label}: ${cost ?? "n/a"}${partial}${tokenPart}`;
 }
 
-async function loadCurrentProviderUsageLine(
+async function loadCurrentProviderUsage(
   params: Pick<HandleCommandsParams, "provider" | "cfg" | "agentId">,
   nowMs: number,
-): Promise<string | undefined> {
+): Promise<ProviderUsageDisplay | undefined> {
   const usageProvider = resolveUsageProviderId(params.provider);
   if (!usageProvider) {
     return undefined;
@@ -90,17 +97,33 @@ async function loadCurrentProviderUsageLine(
       return undefined;
     }
     if (snapshot.error) {
-      return `Provider quota (${snapshot.displayName}) ${snapshot.error}`;
+      return {
+        provider: snapshot.displayName,
+        quotaSummary: `unavailable (${snapshot.error})`,
+        quotaLines: [],
+      };
     }
-    const formatted = formatUsageWindowSummary(snapshot, {
+    const quotaSummary = formatUsageWindowSummary(snapshot, {
       now: nowMs,
       maxWindows: 2,
-      includeResets: true,
+      includeResets: false,
     });
-    if (!formatted) {
-      return undefined;
+    if (!quotaSummary) {
+      return {
+        provider: snapshot.displayName,
+        quotaSummary: "unavailable",
+        quotaLines: [],
+      };
     }
-    return `Provider quota (${snapshot.displayName}) ${formatted}`;
+    return {
+      provider: snapshot.displayName,
+      quotaSummary,
+      quotaLines: formatUsageWindowBars(snapshot, {
+        now: nowMs,
+        maxWindows: 2,
+        includeResets: true,
+      }),
+    };
   } catch {
     return undefined;
   }
@@ -335,25 +358,26 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
     const sessionSuffix = sessionMissing > 0 ? " (partial)" : "";
     const sessionLine =
       sessionCost || sessionTokens
-        ? `Session ${sessionCost ?? "n/a"}${sessionSuffix}${sessionTokens ? ` · ${sessionTokens} tokens` : ""}`
-        : "Session n/a";
+        ? `session: ${sessionCost ?? "n/a"}${sessionSuffix}${sessionTokens ? `, ${sessionTokens} tokens` : ""}`
+        : "session: n/a";
 
     const last24h = summarizeRecentCostWindow(summary, 1, nowMs);
     const last7d = summarizeRecentCostWindow(summary, 7, nowMs);
     const last30d = summarizeRecentCostWindow(summary, 30, nowMs);
 
-    const providerLine = await loadCurrentProviderUsageLine(params, nowMs);
+    const providerUsage = await loadCurrentProviderUsage(params, nowMs);
 
     return {
       shouldContinue: false,
       reply: {
         text: [
-          "💸 Usage cost",
+          "Usage cost",
           sessionLine,
-          formatCostWindowLine("Last 24h", last24h),
-          formatCostWindowLine("Last 7d", last7d),
-          formatCostWindowLine("Last 30d", last30d),
-          providerLine,
+          formatCostWindowLine("24h", last24h),
+          formatCostWindowLine("7d", last7d),
+          formatCostWindowLine("30d", last30d),
+          providerUsage ? `provider: ${providerUsage.provider}` : undefined,
+          providerUsage ? `quota: ${providerUsage.quotaSummary}` : undefined,
         ]
           .filter(Boolean)
           .join("\n"),
@@ -367,25 +391,26 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
   const current = resolveResponseUsageMode(currentRaw);
 
   if (isQuotaRequest) {
-    const providerLine = await loadCurrentProviderUsageLine(params, Date.now());
-    if (!providerLine) {
-      return {
-        shouldContinue: false,
-        reply: {
-          text: `📊 Usage unavailable for provider "${params.provider}". Footer mode: ${current}.`,
-        },
-      };
-    }
+    const providerUsage = await loadCurrentProviderUsage(params, Date.now());
     return {
       shouldContinue: false,
-      reply: { text: `📊 Usage\n${providerLine}\nFooter mode: ${current}.` },
+      reply: {
+        text: [
+          "Usage",
+          `provider: ${providerUsage?.provider ?? params.provider}`,
+          ...(providerUsage?.quotaLines.length
+            ? providerUsage.quotaLines
+            : [`quota: ${providerUsage?.quotaSummary ?? "unavailable"}`]),
+          `footer: ${current}`,
+        ].join("\n"),
+      },
     };
   }
 
   if (rawArgs && !requested && !isNextRequest) {
     return {
       shouldContinue: false,
-      reply: { text: "⚙️ Usage: /usage | /usage rate|cost|next|off|tokens|full" },
+      reply: { text: "Usage: /usage | /usage rate|cost|next|off|tokens|full" },
     };
   }
 
@@ -411,7 +436,7 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
   return {
     shouldContinue: false,
     reply: {
-      text: `⚙️ Usage footer: ${next}.`,
+      text: `Usage footer: ${next}.`,
     },
   };
 };
