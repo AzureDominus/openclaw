@@ -1,4 +1,4 @@
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import {
   setChannelConversationBindingIdleTimeoutBySessionKey,
@@ -12,6 +12,11 @@ import { extractDeliveryInfo } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { getSessionBindingService } from "../../infra/outbound/session-binding-service.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
+import {
+  formatUsageWindowSummary,
+  loadProviderUsageSummary,
+  resolveUsageProviderId,
+} from "../../infra/provider-usage.js";
 import {
   buildRestartSuccessContinuation,
   formatDoctorNonInteractiveHint,
@@ -41,6 +46,79 @@ const SESSION_COMMAND_PREFIX = "/session";
 const SESSION_DURATION_OFF_VALUES = new Set(["off", "disable", "disabled", "none", "0"]);
 const SESSION_ACTION_IDLE = "idle";
 const SESSION_ACTION_MAX_AGE = "max-age";
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function summarizeRecentCostWindow(
+  summary: Awaited<ReturnType<typeof loadCostUsageSummary>>,
+  days: number,
+  nowMs: number,
+) {
+  const keys = new Set<string>();
+  for (let offset = 0; offset < days; offset += 1) {
+    const day = new Date(nowMs - offset * DAY_MS);
+    keys.add(day.toLocaleDateString("en-CA"));
+  }
+
+  let totalCost = 0;
+  let totalTokens = 0;
+  let missingCostEntries = 0;
+  for (const entry of summary.daily) {
+    if (!keys.has(entry.date)) {
+      continue;
+    }
+    totalCost += entry.totalCost;
+    totalTokens += entry.totalTokens;
+    missingCostEntries += entry.missingCostEntries;
+  }
+
+  return { totalCost, totalTokens, missingCostEntries };
+}
+
+function formatCostWindowLine(
+  label: string,
+  window: { totalCost: number; totalTokens: number; missingCostEntries: number },
+) {
+  const cost = formatUsd(window.totalCost);
+  const partial = window.missingCostEntries > 0 ? " (partial)" : "";
+  const tokenPart =
+    window.totalTokens > 0 ? ` · ${formatTokenCount(window.totalTokens)} tokens` : "";
+  return `${label} ${cost ?? "n/a"}${partial}${tokenPart}`;
+}
+
+async function loadCurrentProviderUsageLine(
+  params: Pick<HandleCommandsParams, "provider" | "cfg" | "agentId">,
+  nowMs: number,
+): Promise<string | undefined> {
+  const usageProvider = resolveUsageProviderId(params.provider);
+  if (!usageProvider) {
+    return undefined;
+  }
+  try {
+    const usageSummary = await loadProviderUsageSummary({
+      timeoutMs: 3500,
+      providers: [usageProvider],
+      ...(params.agentId ? { agentDir: resolveAgentDir(params.cfg, params.agentId) } : {}),
+    });
+    const snapshot = usageSummary.providers.find((entry) => entry.provider === usageProvider);
+    if (!snapshot) {
+      return undefined;
+    }
+    if (snapshot.error) {
+      return `Provider quota (${snapshot.displayName}) ${snapshot.error}`;
+    }
+    const formatted = formatUsageWindowSummary(snapshot, {
+      now: nowMs,
+      maxWindows: 2,
+      includeResets: true,
+    });
+    if (!formatted) {
+      return undefined;
+    }
+    return `Provider quota (${snapshot.displayName}) ${formatted}`;
+  } catch {
+    return undefined;
+  }
+}
 
 function buildRestartCommandSentinel(params: HandleCommandsParams): RestartSentinelPayload | null {
   const sessionKey = normalizeOptionalString(params.sessionKey);
@@ -295,9 +373,17 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
   }
 
   const rawArgs = normalized === "/usage" ? "" : normalized.slice("/usage".length).trim();
+  const lowerArgs = rawArgs.toLowerCase();
   const requested = rawArgs ? normalizeUsageDisplay(rawArgs) : undefined;
-  if (normalizeLowercaseStringOrEmpty(rawArgs).startsWith("cost")) {
-    const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+  const isCostRequest = lowerArgs.startsWith("cost");
+  const isQuotaRequest = !rawArgs || lowerArgs === "quota" || lowerArgs === "rate";
+  const isNextRequest = lowerArgs === "next";
+  const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+  const currentRaw = targetSessionEntry?.responseUsage;
+  const current = resolveResponseUsageMode(currentRaw);
+
+  if (isCostRequest) {
+    const nowMs = Date.now();
     const sessionAgentId = params.sessionKey
       ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
       : params.agentId;
@@ -308,7 +394,11 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
       config: params.cfg,
       agentId: sessionAgentId,
     });
-    const summary = await loadCostUsageSummary({ days: 30, config: params.cfg });
+    const summary = await loadCostUsageSummary({
+      days: 30,
+      config: params.cfg,
+      agentId: params.agentId,
+    });
 
     const sessionCost = formatUsd(sessionSummary?.totalCost);
     const sessionTokens = sessionSummary?.totalTokens
@@ -321,35 +411,61 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
         ? `Session ${sessionCost ?? "n/a"}${sessionSuffix}${sessionTokens ? ` · ${sessionTokens} tokens` : ""}`
         : "Session n/a";
 
-    const todayKey = new Date().toLocaleDateString("en-CA");
-    const todayEntry = summary.daily.find((entry) => entry.date === todayKey);
-    const todayCost = formatUsd(todayEntry?.totalCost);
-    const todayMissing = todayEntry?.missingCostEntries ?? 0;
-    const todaySuffix = todayMissing > 0 ? " (partial)" : "";
-    const todayLine = `Today ${todayCost ?? "n/a"}${todaySuffix}`;
+    const last24h = summarizeRecentCostWindow(summary, 1, nowMs);
+    const last7d = summarizeRecentCostWindow(summary, 7, nowMs);
+    const last30d = summarizeRecentCostWindow(summary, 30, nowMs);
 
-    const last30Cost = formatUsd(summary.totals.totalCost);
-    const last30Missing = summary.totals.missingCostEntries;
-    const last30Suffix = last30Missing > 0 ? " (partial)" : "";
-    const last30Line = `Last 30d ${last30Cost ?? "n/a"}${last30Suffix}`;
+    const providerLine = await loadCurrentProviderUsageLine(params, nowMs);
 
     return {
       shouldContinue: false,
-      reply: { text: `💸 Usage cost\n${sessionLine}\n${todayLine}\n${last30Line}` },
+      reply: {
+        text: [
+          "💸 Usage cost",
+          sessionLine,
+          formatCostWindowLine("Last 24h", last24h),
+          formatCostWindowLine("Last 7d", last7d),
+          formatCostWindowLine("Last 30d", last30d),
+          providerLine,
+        ]
+          .filter(Boolean)
+          .join("\n"),
+      },
     };
   }
 
-  if (rawArgs && !requested) {
+  if (isQuotaRequest) {
+    const providerLine = await loadCurrentProviderUsageLine(params, Date.now());
+    if (!providerLine) {
+      return {
+        shouldContinue: false,
+        reply: {
+          text: `📊 Usage unavailable for provider "${params.provider}". Footer mode: ${current}.`,
+        },
+      };
+    }
     return {
       shouldContinue: false,
-      reply: { text: "⚙️ Usage: /usage off|tokens|full|cost" },
+      reply: { text: `📊 Usage\n${providerLine}\nFooter mode: ${current}.` },
     };
   }
 
-  const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
-  const currentRaw = targetSessionEntry?.responseUsage;
-  const current = resolveResponseUsageMode(currentRaw);
-  const next = requested ?? (current === "off" ? "tokens" : current === "tokens" ? "full" : "off");
+  if (rawArgs && !requested && !isNextRequest) {
+    return {
+      shouldContinue: false,
+      reply: { text: "⚙️ Usage: /usage | /usage rate|cost|next|off|tokens|full" },
+    };
+  }
+
+  const next =
+    requested ??
+    (isNextRequest
+      ? current === "off"
+        ? "tokens"
+        : current === "tokens"
+          ? "full"
+          : "off"
+      : current);
 
   if (targetSessionEntry && params.sessionStore && params.sessionKey) {
     if (next === "off") {
