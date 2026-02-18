@@ -5,23 +5,25 @@ export function normalizeQueueMode(raw?: string): QueueMode | undefined {
     return undefined;
   }
   const cleaned = raw.trim().toLowerCase();
-  if (cleaned === "queue" || cleaned === "queued") {
-    return "steer";
-  }
-  if (cleaned === "interrupt" || cleaned === "interrupts" || cleaned === "abort") {
-    return "interrupt";
-  }
   if (cleaned === "steer" || cleaned === "steering") {
     return "steer";
   }
-  if (cleaned === "followup" || cleaned === "follow-ups" || cleaned === "followups") {
-    return "followup";
-  }
-  if (cleaned === "collect" || cleaned === "coalesce") {
-    return "collect";
-  }
-  if (cleaned === "steer+backlog" || cleaned === "steer-backlog" || cleaned === "steer_backlog") {
-    return "steer-backlog";
+  if (
+    cleaned === "queue" ||
+    cleaned === "queued" ||
+    cleaned === "followup" ||
+    cleaned === "follow-ups" ||
+    cleaned === "followups" ||
+    cleaned === "collect" ||
+    cleaned === "coalesce" ||
+    cleaned === "interrupt" ||
+    cleaned === "interrupts" ||
+    cleaned === "abort" ||
+    cleaned === "steer+backlog" ||
+    cleaned === "steer-backlog" ||
+    cleaned === "steer_backlog"
+  ) {
+    return "queue";
   }
   return undefined;
 }

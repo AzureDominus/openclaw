@@ -1,16 +1,28 @@
+import type { FollowupRun } from "./types.js";
 import { defaultRuntime } from "../../../runtime.js";
-import {
-  buildCollectPrompt,
-  clearQueueSummaryState,
-  drainCollectItemIfNeeded,
-  drainNextQueueItem,
-  hasCrossChannelItems,
-  previewQueueSummaryPrompt,
-  waitForQueueDebounce,
-} from "../../../utils/queue-helpers.js";
+import { buildQueueSummaryPrompt, waitForQueueDebounce } from "../../../utils/queue-helpers.js";
 import { isRoutableChannel } from "../route-reply.js";
 import { FOLLOWUP_QUEUES } from "./state.js";
-import type { FollowupRun } from "./types.js";
+
+function previewQueueSummaryPrompt(queue: {
+  dropPolicy: "summarize" | "old" | "new";
+  droppedCount: number;
+  summaryLines: string[];
+}): string | undefined {
+  return buildQueueSummaryPrompt({
+    state: {
+      dropPolicy: queue.dropPolicy,
+      droppedCount: queue.droppedCount,
+      summaryLines: [...queue.summaryLines],
+    },
+    noun: "message",
+  });
+}
+
+function clearQueueSummaryState(queue: { droppedCount: number; summaryLines: string[] }): void {
+  queue.droppedCount = 0;
+  queue.summaryLines = [];
+}
 
 export function scheduleFollowupDrain(
   key: string,
@@ -23,111 +35,98 @@ export function scheduleFollowupDrain(
   queue.draining = true;
   void (async () => {
     try {
-      let forceIndividualCollect = false;
       while (queue.items.length > 0 || queue.droppedCount > 0) {
         await waitForQueueDebounce(queue);
-        if (queue.mode === "collect") {
-          // Once the batch is mixed, never collect again within this drain.
-          // Prevents “collect after shift” collapsing different targets.
-          //
-          // Debug: `pnpm test src/auto-reply/reply/queue.collect-routing.test.ts`
-          // Check if messages span multiple channels.
-          // If so, process individually to preserve per-message routing.
-          const isCrossChannel = hasCrossChannelItems(queue.items, (item) => {
-            const channel = item.originatingChannel;
-            const to = item.originatingTo;
-            const accountId = item.originatingAccountId;
-            const threadId = item.originatingThreadId;
-            if (!channel && !to && !accountId && threadId == null) {
-              return {};
-            }
-            if (!isRoutableChannel(channel) || !to) {
-              return { cross: true };
-            }
-            const threadKey = threadId != null ? String(threadId) : "";
-            return {
-              key: [channel, to, accountId || "", threadKey].join("|"),
-            };
-          });
-
-          const collectDrainResult = await drainCollectItemIfNeeded({
-            forceIndividualCollect,
-            isCrossChannel,
-            setForceIndividualCollect: (next) => {
-              forceIndividualCollect = next;
-            },
-            items: queue.items,
-            run: runFollowup,
-          });
-          if (collectDrainResult === "empty") {
-            break;
-          }
-          if (collectDrainResult === "drained") {
+        const summaryPrompt = previewQueueSummaryPrompt(queue);
+        const firstItem = queue.items[0];
+        if (!firstItem) {
+          if (summaryPrompt && queue.lastRun) {
+            await runFollowup({
+              prompt: summaryPrompt,
+              run: queue.lastRun,
+              enqueuedAt: Date.now(),
+            });
+            clearQueueSummaryState(queue);
             continue;
           }
+          break;
+        }
 
-          const items = queue.items.slice();
-          const summary = previewQueueSummaryPrompt({ state: queue, noun: "message" });
-          const run = items.at(-1)?.run ?? queue.lastRun;
-          if (!run) {
-            break;
+        const keyedItems = queue.items.map((item, index) => {
+          const channel = item.originatingChannel;
+          const to = item.originatingTo;
+          const accountId = item.originatingAccountId;
+          const threadId = item.originatingThreadId;
+          if (!channel && !to && !accountId && threadId == null) {
+            return { item, key: "" };
           }
+          if (!isRoutableChannel(channel) || !to) {
+            return { item, key: `unsafe:${index}` };
+          }
+          const threadKey = threadId != null ? String(threadId) : "";
+          return {
+            item,
+            key: [channel, to, accountId || "", threadKey].join("|"),
+          };
+        });
 
-          // Preserve originating channel from items when collecting same-channel.
-          const originatingChannel = items.find((i) => i.originatingChannel)?.originatingChannel;
-          const originatingTo = items.find((i) => i.originatingTo)?.originatingTo;
-          const originatingAccountId = items.find(
-            (i) => i.originatingAccountId,
-          )?.originatingAccountId;
-          const originatingThreadId = items.find(
-            (i) => i.originatingThreadId != null,
-          )?.originatingThreadId;
+        const firstKey = keyedItems[0]?.key;
+        if (firstKey === undefined) {
+          break;
+        }
+        const items = keyedItems
+          .filter((entry) => entry.key === firstKey)
+          .map((entry) => entry.item);
+        if (items.length === 0) {
+          break;
+        }
 
-          const prompt = buildCollectPrompt({
-            title: "[Queued messages while agent was busy]",
-            items,
-            summary,
-            renderItem: (item, idx) => `---\nQueued #${idx + 1}\n${item.prompt}`.trim(),
-          });
-          await runFollowup({
-            prompt,
-            run,
-            enqueuedAt: Date.now(),
-            originatingChannel,
-            originatingTo,
-            originatingAccountId,
-            originatingThreadId,
-          });
-          queue.items.splice(0, items.length);
-          if (summary) {
+        const run = items.at(-1)?.run ?? queue.lastRun;
+        if (!run) {
+          break;
+        }
+
+        const joinedPrompts = items
+          .map((item) => item.prompt.trim())
+          .filter((text) => text.length > 0)
+          .join("\n\n");
+        const prompt = [summaryPrompt, joinedPrompts].filter(Boolean).join("\n\n").trim();
+
+        queue.items = keyedItems
+          .filter((entry) => entry.key !== firstKey)
+          .map((entry) => entry.item);
+
+        if (!prompt) {
+          if (summaryPrompt) {
             clearQueueSummaryState(queue);
           }
           continue;
         }
 
-        const summaryPrompt = previewQueueSummaryPrompt({ state: queue, noun: "message" });
+        const originatingChannel = items.find((i) => i.originatingChannel)?.originatingChannel;
+        const originatingTo = items.find((i) => i.originatingTo)?.originatingTo;
+        const originatingAccountId = items.find(
+          (i) => i.originatingAccountId,
+        )?.originatingAccountId;
+        const originatingThreadId = items.find(
+          (i) => i.originatingThreadId != null,
+        )?.originatingThreadId;
+
+        await runFollowup({
+          prompt,
+          run,
+          enqueuedAt: Date.now(),
+          originatingChannel,
+          originatingTo,
+          originatingAccountId,
+          originatingThreadId,
+        });
         if (summaryPrompt) {
-          const run = queue.lastRun;
-          if (!run) {
-            break;
-          }
-          if (
-            !(await drainNextQueueItem(queue.items, async () => {
-              await runFollowup({
-                prompt: summaryPrompt,
-                run,
-                enqueuedAt: Date.now(),
-              });
-            }))
-          ) {
-            break;
-          }
           clearQueueSummaryState(queue);
-          continue;
         }
 
-        if (!(await drainNextQueueItem(queue.items, runFollowup))) {
-          break;
+        if (summaryPrompt && queue.items.length === 0 && queue.droppedCount > 0) {
+          clearQueueSummaryState(queue);
         }
       }
     } catch (err) {

@@ -23,7 +23,7 @@ vi.mock("../agents/model-fallback.js", () => ({
 vi.mock("../agents/pi-embedded.js", () => ({
   abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
   runEmbeddedPiAgent: (params: unknown) => runEmbeddedPiAgentMock(params),
-  queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
+  queueEmbeddedPiMessage: vi.fn().mockResolvedValue({ status: "no-active" }),
   resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
   isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
   isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),

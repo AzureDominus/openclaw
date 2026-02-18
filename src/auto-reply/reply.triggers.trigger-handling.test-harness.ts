@@ -14,7 +14,7 @@ const piEmbeddedMocks = vi.hoisted(() => ({
   abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
   compactEmbeddedPiSession: vi.fn(),
   runEmbeddedPiAgent: vi.fn(),
-  queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
+  queueEmbeddedPiMessage: vi.fn().mockResolvedValue({ status: "no-active" }),
   isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
   isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
 }));

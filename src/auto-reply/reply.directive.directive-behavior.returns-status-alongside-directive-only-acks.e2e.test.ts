@@ -108,14 +108,14 @@ describe("directive behavior", () => {
       const res = await runQueueDirective({
         home,
         storePath,
-        body: "/queue interrupt",
+        body: "/queue queue",
       });
 
       const text = extractReplyText(res);
-      expect(text).toMatch(/^⚙️ Queue mode set to interrupt\./);
+      expect(text).toMatch(/^⚙️ Queue mode set to queue\./);
       const store = loadSessionStore(storePath);
       const entry = Object.values(store)[0];
-      expect(entry?.queueMode).toBe("interrupt");
+      expect(entry?.queueMode).toBe("queue");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
@@ -130,13 +130,13 @@ describe("directive behavior", () => {
       });
 
       const text = extractReplyText(res);
-      expect(text).toMatch(/^⚙️ Queue mode set to collect\./);
+      expect(text).toMatch(/^⚙️ Queue mode set to queue\./);
       expect(text).toMatch(/Queue debounce set to 2000ms/);
       expect(text).toMatch(/Queue cap set to 5/);
       expect(text).toMatch(/Queue drop set to old/);
       const store = loadSessionStore(storePath);
       const entry = Object.values(store)[0];
-      expect(entry?.queueMode).toBe("collect");
+      expect(entry?.queueMode).toBe("queue");
       expect(entry?.queueDebounceMs).toBe(2000);
       expect(entry?.queueCap).toBe(5);
       expect(entry?.queueDrop).toBe("old");
@@ -147,7 +147,7 @@ describe("directive behavior", () => {
     await withTempHome(async (home) => {
       const storePath = path.join(home, "sessions.json");
 
-      await runQueueDirective({ home, storePath, body: "/queue interrupt" });
+      await runQueueDirective({ home, storePath, body: "/queue queue" });
       const res = await runQueueDirective({ home, storePath, body: "/queue reset" });
       const text = extractReplyText(res);
       expect(text).toMatch(/^⚙️ Queue mode reset to default\./);

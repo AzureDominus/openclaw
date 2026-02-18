@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { loadModelCatalog } from "../agents/model-catalog.js";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { withTempHome as withTempHomeHarness } from "../config/home-env.test-harness.js";
+import { loadModelCatalog } from "../agents/model-catalog.js";
 import { getReplyFromConfig } from "./reply.js";
 
 type RunEmbeddedPiAgent = typeof import("../agents/pi-embedded.js").runEmbeddedPiAgent;
@@ -13,7 +13,7 @@ type RunEmbeddedPiAgentReply = Awaited<ReturnType<RunEmbeddedPiAgent>>;
 const piEmbeddedMock = vi.hoisted(() => ({
   abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
   runEmbeddedPiAgent: vi.fn<RunEmbeddedPiAgent>(),
-  queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
+  queueEmbeddedPiMessage: vi.fn().mockResolvedValue({ status: "no-active" }),
   resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
   isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
   isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
@@ -24,6 +24,37 @@ vi.mock("../agents/pi-embedded.js", () => piEmbeddedMock);
 vi.mock("../agents/model-catalog.js", () => ({
   loadModelCatalog: vi.fn(),
 }));
+
+type HomeEnvSnapshot = {
+  HOME: string | undefined;
+  USERPROFILE: string | undefined;
+  HOMEDRIVE: string | undefined;
+  HOMEPATH: string | undefined;
+  OPENCLAW_STATE_DIR: string | undefined;
+};
+
+function snapshotHomeEnv(): HomeEnvSnapshot {
+  return {
+    HOME: process.env.HOME,
+    USERPROFILE: process.env.USERPROFILE,
+    HOMEDRIVE: process.env.HOMEDRIVE,
+    HOMEPATH: process.env.HOMEPATH,
+    OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
+  };
+}
+
+function restoreHomeEnv(snapshot: HomeEnvSnapshot) {
+  for (const [key, value] of Object.entries(snapshot)) {
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+}
+
+let fixtureRoot = "";
+let caseId = 0;
 
 type GetReplyOptions = NonNullable<Parameters<typeof getReplyFromConfig>[1]>;
 
@@ -80,17 +111,53 @@ async function runTelegramReply(params: {
 }
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  return withTempHomeHarness("openclaw-stream-", async (home) => {
-    await fs.mkdir(path.join(home, ".openclaw", "agents", "main", "sessions"), { recursive: true });
-    return fn(home);
-  });
+  const home = path.join(fixtureRoot, `case-${++caseId}`);
+  await fs.mkdir(path.join(home, ".openclaw", "agents", "main", "sessions"), { recursive: true });
+  const envSnapshot = snapshotHomeEnv();
+  process.env.HOME = home;
+  process.env.USERPROFILE = home;
+  process.env.OPENCLAW_STATE_DIR = path.join(home, ".openclaw");
+
+  if (process.platform === "win32") {
+    const match = home.match(/^([A-Za-z]:)(.*)$/);
+    if (match) {
+      process.env.HOMEDRIVE = match[1];
+      process.env.HOMEPATH = match[2] || "\\";
+    }
+  }
+
+  try {
+    return await fn(home);
+  } finally {
+    restoreHomeEnv(envSnapshot);
+  }
 }
 
 describe("block streaming", () => {
+  beforeAll(async () => {
+    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-stream-"));
+  });
+
+  afterAll(async () => {
+    if (process.platform === "win32") {
+      await fs.rm(fixtureRoot, {
+        recursive: true,
+        force: true,
+        maxRetries: 10,
+        retryDelay: 50,
+      });
+    } else {
+      await fs.rm(fixtureRoot, {
+        recursive: true,
+        force: true,
+      });
+    }
+  });
+
   beforeEach(() => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     piEmbeddedMock.abortEmbeddedPiRun.mockReset().mockReturnValue(false);
-    piEmbeddedMock.queueEmbeddedPiMessage.mockReset().mockReturnValue(false);
+    piEmbeddedMock.queueEmbeddedPiMessage.mockReset().mockResolvedValue({ status: "no-active" });
     piEmbeddedMock.isEmbeddedPiRunActive.mockReset().mockReturnValue(false);
     piEmbeddedMock.isEmbeddedPiRunStreaming.mockReset().mockReturnValue(false);
     piEmbeddedMock.runEmbeddedPiAgent.mockReset();

@@ -143,9 +143,9 @@ describe("directive parsing", () => {
   });
 
   it("matches queue directive", () => {
-    const res = extractQueueDirective("please /queue interrupt now");
+    const res = extractQueueDirective("please /queue queue now");
     expect(res.hasDirective).toBe(true);
-    expect(res.queueMode).toBe("interrupt");
+    expect(res.queueMode).toBe("queue");
     expect(res.queueReset).toBe(false);
     expect(res.cleaned).toBe("please now");
   });
@@ -185,7 +185,7 @@ describe("directive parsing", () => {
       "please /queue steer+backlog debounce:2s cap:5 drop:summarize now",
     );
     expect(res.hasDirective).toBe(true);
-    expect(res.queueMode).toBe("steer-backlog");
+    expect(res.queueMode).toBe("queue");
     expect(res.debounceMs).toBe(2000);
     expect(res.cap).toBe(5);
     expect(res.dropPolicy).toBe("summarize");

@@ -179,10 +179,10 @@ describe("directive behavior", () => {
 
       const text = replyText(res);
       expect(text).toContain(
-        "Current queue settings: mode=collect, debounce=1500ms, cap=9, drop=summarize.",
+        "Current queue settings: mode=queue, debounce=1500ms, cap=9, drop=summarize.",
       );
       expect(text).toContain(
-        "Options: modes steer, followup, collect, steer+backlog, interrupt; debounce:<ms|s|m>, cap:<n>, drop:old|new|summarize.",
+        "Options: modes steer, queue; debounce:<ms|s|m>, cap:<n>, drop:old|new|summarize.",
       );
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });

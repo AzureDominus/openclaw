@@ -3,11 +3,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
-import * as sessions from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
+import * as sessions from "../../config/sessions.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 type AgentRunParams = {
@@ -58,7 +58,8 @@ vi.mock("../../agents/model-fallback.js", () => ({
 }));
 
 vi.mock("../../agents/pi-embedded.js", () => ({
-  queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
+  isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
+  queueEmbeddedPiMessage: vi.fn().mockResolvedValue({ status: "no-active" }),
   runEmbeddedPiAgent: (params: unknown) => state.runEmbeddedPiAgentMock(params),
 }));
 
@@ -142,7 +143,6 @@ function createMinimalRun(params?: {
         shouldSteer: false,
         shouldFollowup: false,
         isActive: false,
-        isStreaming: false,
         opts,
         typing,
         sessionEntry: params?.sessionEntry,
@@ -249,7 +249,6 @@ async function runReplyAgentWithBase(params: {
     shouldSteer: false,
     shouldFollowup: false,
     isActive: false,
-    isStreaming: false,
     typing,
     sessionCtx,
     sessionEntry: params.sessionEntry,

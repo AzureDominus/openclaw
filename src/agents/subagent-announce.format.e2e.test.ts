@@ -16,7 +16,7 @@ const readLatestAssistantReplyMock = vi.fn(
 const embeddedRunMock = {
   isEmbeddedPiRunActive: vi.fn(() => false),
   isEmbeddedPiRunStreaming: vi.fn(() => false),
-  queueEmbeddedPiMessage: vi.fn(() => false),
+  queueEmbeddedPiMessage: vi.fn(async () => ({ status: "no-active" })),
   waitForEmbeddedPiRunEnd: vi.fn(async () => true),
 };
 const subagentRegistryMock = {
@@ -119,7 +119,7 @@ describe("subagent announce formatting", () => {
     sessionsDeleteSpy.mockClear();
     embeddedRunMock.isEmbeddedPiRunActive.mockReset().mockReturnValue(false);
     embeddedRunMock.isEmbeddedPiRunStreaming.mockReset().mockReturnValue(false);
-    embeddedRunMock.queueEmbeddedPiMessage.mockReset().mockReturnValue(false);
+    embeddedRunMock.queueEmbeddedPiMessage.mockReset().mockResolvedValue({ status: "no-active" });
     embeddedRunMock.waitForEmbeddedPiRunEnd.mockReset().mockResolvedValue(true);
     subagentRegistryMock.isSubagentSessionRunActive.mockReset().mockReturnValue(true);
     subagentRegistryMock.countActiveDescendantRuns.mockReset().mockReturnValue(0);
@@ -431,7 +431,7 @@ describe("subagent announce formatting", () => {
     const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
     embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(true);
     embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(true);
-    embeddedRunMock.queueEmbeddedPiMessage.mockReturnValue(true);
+    embeddedRunMock.queueEmbeddedPiMessage.mockResolvedValue({ status: "queued" });
     sessionStore = {
       "agent:main:main": {
         sessionId: "session-123",
