@@ -1,28 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { enqueueAnnounce, resetAnnounceQueuesForTests } from "./subagent-announce-queue.js";
 
-function createRetryingSend() {
-  const prompts: string[] = [];
-  let attempts = 0;
-  let resolved = false;
-  let resolveSecondAttempt = () => {};
-  const waitForSecondAttempt = new Promise<void>((resolve) => {
-    resolveSecondAttempt = resolve;
-  });
-
-  const send = vi.fn(async (item: { prompt: string }) => {
-    attempts += 1;
-    prompts.push(item.prompt);
-    if (attempts >= 2 && !resolved) {
-      resolved = true;
-      resolveSecondAttempt();
+async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    if (predicate()) {
+      return;
     }
-    if (attempts === 1) {
-      throw new Error("gateway timeout after 60000ms");
-    }
-  });
-
-  return { send, prompts, waitForSecondAttempt };
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("timed out waiting for condition");
 }
 
 describe("subagent-announce-queue", () => {
@@ -31,7 +18,15 @@ describe("subagent-announce-queue", () => {
   });
 
   it("retries failed sends without dropping queued announce items", async () => {
-    const sender = createRetryingSend();
+    const sendPrompts: string[] = [];
+    let attempts = 0;
+    const send = vi.fn(async (item: { prompt: string }) => {
+      attempts += 1;
+      sendPrompts.push(item.prompt);
+      if (attempts === 1) {
+        throw new Error("gateway timeout after 60000ms");
+      }
+    });
 
     enqueueAnnounce({
       key: "announce:test:retry",
@@ -40,17 +35,25 @@ describe("subagent-announce-queue", () => {
         enqueuedAt: Date.now(),
         sessionKey: "agent:main:telegram:dm:u1",
       },
-      settings: { mode: "followup", debounceMs: 0 },
-      send: sender.send,
+      settings: { mode: "queue", debounceMs: 0 },
+      send,
     });
 
-    await sender.waitForSecondAttempt;
-    expect(sender.send).toHaveBeenCalledTimes(2);
-    expect(sender.prompts).toEqual(["subagent completed", "subagent completed"]);
+    await waitFor(() => attempts >= 2);
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(sendPrompts).toEqual(["subagent completed", "subagent completed"]);
   });
 
   it("preserves queue summary state across failed summary delivery retries", async () => {
-    const sender = createRetryingSend();
+    const sendPrompts: string[] = [];
+    let attempts = 0;
+    const send = vi.fn(async (item: { prompt: string }) => {
+      attempts += 1;
+      sendPrompts.push(item.prompt);
+      if (attempts === 1) {
+        throw new Error("gateway timeout after 60000ms");
+      }
+    });
 
     enqueueAnnounce({
       key: "announce:test:summary-retry",
@@ -60,8 +63,8 @@ describe("subagent-announce-queue", () => {
         enqueuedAt: Date.now(),
         sessionKey: "agent:main:telegram:dm:u1",
       },
-      settings: { mode: "followup", debounceMs: 0, cap: 1, dropPolicy: "summarize" },
-      send: sender.send,
+      settings: { mode: "queue", debounceMs: 0, cap: 1, dropPolicy: "summarize" },
+      send,
     });
     enqueueAnnounce({
       key: "announce:test:summary-retry",
@@ -71,18 +74,26 @@ describe("subagent-announce-queue", () => {
         enqueuedAt: Date.now(),
         sessionKey: "agent:main:telegram:dm:u1",
       },
-      settings: { mode: "followup", debounceMs: 0, cap: 1, dropPolicy: "summarize" },
-      send: sender.send,
+      settings: { mode: "queue", debounceMs: 0, cap: 1, dropPolicy: "summarize" },
+      send,
     });
 
-    await sender.waitForSecondAttempt;
-    expect(sender.send).toHaveBeenCalledTimes(2);
-    expect(sender.prompts[0]).toContain("[Queue overflow]");
-    expect(sender.prompts[1]).toContain("[Queue overflow]");
+    await waitFor(() => attempts >= 2);
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(sendPrompts[0]).toContain("[Queue overflow]");
+    expect(sendPrompts[1]).toContain("[Queue overflow]");
   });
 
-  it("retries collect-mode batches without losing queued items", async () => {
-    const sender = createRetryingSend();
+  it("retries queue batches without losing queued items", async () => {
+    const sendPrompts: string[] = [];
+    let attempts = 0;
+    const send = vi.fn(async (item: { prompt: string }) => {
+      attempts += 1;
+      sendPrompts.push(item.prompt);
+      if (attempts === 1) {
+        throw new Error("gateway timeout after 60000ms");
+      }
+    });
 
     enqueueAnnounce({
       key: "announce:test:collect-retry",
@@ -91,8 +102,8 @@ describe("subagent-announce-queue", () => {
         enqueuedAt: Date.now(),
         sessionKey: "agent:main:telegram:dm:u1",
       },
-      settings: { mode: "collect", debounceMs: 0 },
-      send: sender.send,
+      settings: { mode: "queue", debounceMs: 0 },
+      send,
     });
     enqueueAnnounce({
       key: "announce:test:collect-retry",
@@ -101,19 +112,15 @@ describe("subagent-announce-queue", () => {
         enqueuedAt: Date.now(),
         sessionKey: "agent:main:telegram:dm:u1",
       },
-      settings: { mode: "collect", debounceMs: 0 },
-      send: sender.send,
+      settings: { mode: "queue", debounceMs: 0 },
+      send,
     });
 
-    await sender.waitForSecondAttempt;
-    expect(sender.send).toHaveBeenCalledTimes(2);
-    expect(sender.prompts[0]).toContain("Queued #1");
-    expect(sender.prompts[0]).toContain("queued item one");
-    expect(sender.prompts[0]).toContain("Queued #2");
-    expect(sender.prompts[0]).toContain("queued item two");
-    expect(sender.prompts[1]).toContain("Queued #1");
-    expect(sender.prompts[1]).toContain("queued item one");
-    expect(sender.prompts[1]).toContain("Queued #2");
-    expect(sender.prompts[1]).toContain("queued item two");
+    await waitFor(() => attempts >= 2);
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(sendPrompts[0]).toContain("queued item one");
+    expect(sendPrompts[0]).toContain("queued item two");
+    expect(sendPrompts[1]).toContain("queued item one");
+    expect(sendPrompts[1]).toContain("queued item two");
   });
 });

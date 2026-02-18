@@ -544,19 +544,15 @@ async function maybeQueueSubagentAnnounce(params: {
   });
   const isActive = isEmbeddedPiRunActive(sessionId);
 
-  const shouldSteer = queueSettings.mode === "steer" || queueSettings.mode === "steer-backlog";
+  const shouldSteer = queueSettings.mode === "steer";
   if (shouldSteer) {
-    const steered = queueEmbeddedPiMessage(sessionId, params.triggerMessage);
-    if (steered) {
+    const steerResult = await queueEmbeddedPiMessage(sessionId, params.triggerMessage);
+    if (steerResult.status === "queued") {
       return "steered";
     }
   }
 
-  const shouldFollowup =
-    queueSettings.mode === "followup" ||
-    queueSettings.mode === "collect" ||
-    queueSettings.mode === "steer-backlog" ||
-    queueSettings.mode === "interrupt";
+  const shouldFollowup = queueSettings.mode === "queue";
   if (isActive && (shouldFollowup || queueSettings.mode === "steer")) {
     const origin = resolveAnnounceOrigin(entry, params.requesterOrigin);
     enqueueAnnounce({

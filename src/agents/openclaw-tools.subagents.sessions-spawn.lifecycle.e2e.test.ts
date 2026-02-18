@@ -10,7 +10,7 @@ import { resetSubagentRegistryForTests } from "./subagent-registry.js";
 vi.mock("./pi-embedded.js", () => ({
   isEmbeddedPiRunActive: () => false,
   isEmbeddedPiRunStreaming: () => false,
-  queueEmbeddedPiMessage: () => false,
+  queueEmbeddedPiMessage: async () => ({ status: "no-active" }),
   waitForEmbeddedPiRunEnd: async () => true,
 }));
 

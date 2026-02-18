@@ -1,12 +1,12 @@
-import { applyQueueDropPolicy, shouldSkipQueueItem } from "../../../utils/queue-helpers.js";
-import { FOLLOWUP_QUEUES, getFollowupQueue } from "./state.js";
 import type { FollowupRun, QueueDedupeMode, QueueSettings } from "./types.js";
+import { applyQueueDropPolicy } from "../../../utils/queue-helpers.js";
+import { FOLLOWUP_QUEUES, getFollowupQueue } from "./state.js";
 
-function isRunAlreadyQueued(
+function findQueuedRunIndex(
   run: FollowupRun,
   items: FollowupRun[],
   allowPromptFallback = false,
-): boolean {
+): number {
   const hasSameRouting = (item: FollowupRun) =>
     item.originatingChannel === run.originatingChannel &&
     item.originatingTo === run.originatingTo &&
@@ -15,12 +15,12 @@ function isRunAlreadyQueued(
 
   const messageId = run.messageId?.trim();
   if (messageId) {
-    return items.some((item) => item.messageId?.trim() === messageId && hasSameRouting(item));
+    return items.findIndex((item) => item.messageId?.trim() === messageId && hasSameRouting(item));
   }
   if (!allowPromptFallback) {
-    return false;
+    return -1;
   }
-  return items.some((item) => item.prompt === run.prompt && hasSameRouting(item));
+  return items.findIndex((item) => item.prompt === run.prompt && hasSameRouting(item));
 }
 
 export function enqueueFollowupRun(
@@ -30,15 +30,20 @@ export function enqueueFollowupRun(
   dedupeMode: QueueDedupeMode = "message-id",
 ): boolean {
   const queue = getFollowupQueue(key, settings);
-  const dedupe =
-    dedupeMode === "none"
-      ? undefined
-      : (item: FollowupRun, items: FollowupRun[]) =>
-          isRunAlreadyQueued(item, items, dedupeMode === "prompt");
+  const existingIndex =
+    dedupeMode === "none" ? -1 : findQueuedRunIndex(run, queue.items, dedupeMode === "prompt");
 
-  // Deduplicate: skip if the same message is already queued.
-  if (shouldSkipQueueItem({ item: run, items: queue.items, dedupe })) {
-    return false;
+  // Upsert edits by provider message id so queued content stays fresh.
+  if (existingIndex >= 0) {
+    const existing = queue.items[existingIndex];
+    queue.items[existingIndex] = {
+      ...existing,
+      ...run,
+      enqueuedAt: existing?.enqueuedAt ?? run.enqueuedAt,
+    };
+    queue.lastEnqueuedAt = Date.now();
+    queue.lastRun = run.run;
+    return true;
   }
 
   queue.lastEnqueuedAt = Date.now();

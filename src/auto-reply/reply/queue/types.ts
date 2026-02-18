@@ -5,7 +5,7 @@ import type { SessionEntry } from "../../../config/sessions.js";
 import type { OriginatingChannelType } from "../../templating.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../directives.js";
 
-export type QueueMode = "steer" | "followup" | "collect" | "steer-backlog" | "interrupt" | "queue";
+export type QueueMode = "steer" | "queue";
 
 export type QueueDropPolicy = "old" | "new" | "summarize";
 

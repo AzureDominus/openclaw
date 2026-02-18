@@ -4,10 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
-import { loadSessionStore, saveSessionStore } from "../../config/sessions.js";
-import { onAgentEvent } from "../../infra/agent-events.js";
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
+import { loadSessionStore, saveSessionStore } from "../../config/sessions.js";
+import { onAgentEvent } from "../../infra/agent-events.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 const runEmbeddedPiAgentMock = vi.fn();
@@ -29,7 +29,7 @@ vi.mock("../../agents/pi-embedded.js", async () => {
   );
   return {
     ...actual,
-    queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
+    queueEmbeddedPiMessage: vi.fn().mockResolvedValue({ status: "no-active" }),
     runEmbeddedPiAgent: (params: unknown) => runEmbeddedPiAgentMock(params),
   };
 });
@@ -271,7 +271,6 @@ describe("runReplyAgent authProfileId fallback scoping", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       typing,
       sessionCtx,
       sessionEntry,
@@ -413,7 +412,6 @@ describe("runReplyAgent auto-compaction token update", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       typing,
       sessionCtx,
       sessionEntry,
@@ -474,7 +472,6 @@ describe("runReplyAgent auto-compaction token update", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       typing,
       sessionCtx,
       sessionEntry,
@@ -563,7 +560,6 @@ describe("runReplyAgent block streaming", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       opts: { onBlockReply },
       typing,
       sessionCtx,
@@ -665,7 +661,6 @@ describe("runReplyAgent block streaming", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       opts: { onBlockReply, blockReplyTimeoutMs: 1 },
       typing,
       sessionCtx,
@@ -736,7 +731,6 @@ describe("runReplyAgent claude-cli routing", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       typing,
       sessionCtx,
       defaultModel: "claude-cli/opus-4.5",
@@ -835,7 +829,6 @@ describe("runReplyAgent messaging tool suppression", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       typing,
       sessionCtx,
       sessionKey,
@@ -1008,7 +1001,6 @@ describe("runReplyAgent reminder commitment guard", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       typing,
       sessionCtx,
       sessionKey: "main",
@@ -1106,7 +1098,6 @@ describe("runReplyAgent fallback reasoning tags", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       typing,
       sessionCtx,
       sessionEntry: params?.sessionEntry,
@@ -1227,7 +1218,6 @@ describe("runReplyAgent response usage footer", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       typing,
       sessionCtx,
       sessionEntry,
@@ -1336,7 +1326,6 @@ describe("runReplyAgent transient HTTP retry", () => {
       shouldSteer: false,
       shouldFollowup: false,
       isActive: false,
-      isStreaming: false,
       typing,
       sessionCtx,
       defaultModel: "anthropic/claude-opus-4-5",
