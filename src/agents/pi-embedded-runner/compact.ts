@@ -29,7 +29,7 @@ import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
-import { resolveSessionAgentIds } from "../agent-scope.js";
+import { resolveContinueGuardRetries, resolveSessionAgentIds } from "../agent-scope.js";
 import type { ExecElevatedDefaults } from "../bash-tools.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../bootstrap-files.js";
 import { listChannelSupportedActions, resolveChannelMessageToolHints } from "../channel-tools.js";
@@ -533,6 +533,7 @@ export async function compactEmbeddedPiSessionDirect(
       sessionKey: params.sessionKey,
       config: params.config,
     });
+    const continueGuardMaxRetries = resolveContinueGuardRetries(params.config, sessionAgentId);
     const isDefaultAgent = sessionAgentId === defaultAgentId;
     const promptMode =
       isSubagentSessionKey(params.sessionKey) || isCronSessionKey(params.sessionKey)
@@ -574,6 +575,7 @@ export async function compactEmbeddedPiSessionDirect(
       userTimeFormat,
       contextFiles,
       memoryCitationsMode: params.config?.memory?.citations,
+      stopReasonTagEnabled: continueGuardMaxRetries > 0,
     });
     const systemPromptOverride = createSystemPromptOverride(appendPrompt);
 

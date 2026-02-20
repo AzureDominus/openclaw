@@ -10,6 +10,7 @@ import type { CliBackendConfig } from "../../config/types.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
 import { isRecord } from "../../utils.js";
+import { resolveContinueGuardRetries } from "../agent-scope.js";
 import { buildModelAliasLines } from "../model-alias-lines.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
 import { resolveOwnerDisplaySetting } from "../owner-display.js";
@@ -74,6 +75,7 @@ export function buildSystemPrompt(params: {
   });
   const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
   const ownerDisplay = resolveOwnerDisplaySetting(params.config);
+  const continueGuardMaxRetries = resolveContinueGuardRetries(params.config, params.agentId);
   return buildAgentSystemPrompt({
     workspaceDir: params.workspaceDir,
     defaultThinkLevel: params.defaultThinkLevel,
@@ -95,6 +97,7 @@ export function buildSystemPrompt(params: {
     bootstrapTruncationWarningLines: params.bootstrapTruncationWarningLines,
     ttsHint,
     memoryCitationsMode: params.config?.memory?.citations,
+    stopReasonTagEnabled: continueGuardMaxRetries > 0,
   });
 }
 
