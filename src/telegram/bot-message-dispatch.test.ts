@@ -370,6 +370,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     await dispatchWithContext({ context: createContext(), streamMode: "partial" });
 
+    expect(draftStream.update).toHaveBeenCalledWith("Ready when you are.");
     expect(editMessageTelegram).toHaveBeenCalledWith(
       123,
       999,
@@ -379,7 +380,33 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.clear).not.toHaveBeenCalled();
   });
 
-  it("keeps streamed preview when final text regresses, instead of deleting it", async () => {
+  it("strips empty trailing stop-reason markers from partial previews", async () => {
+    const draftStream = createDraftStream(999);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({
+          text: "Ready when you are.\n\nOPENCLAW_STOP_REASON:",
+        });
+        await dispatcherOptions.deliver({ text: "Ready when you are." }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "999" });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(draftStream.update).toHaveBeenCalledWith("Ready when you are.");
+    expect(editMessageTelegram).toHaveBeenCalledWith(
+      123,
+      999,
+      "Ready when you are.",
+      expect.any(Object),
+    );
+    expect(draftStream.clear).not.toHaveBeenCalled();
+  });
+
+  it("always finalizes preview by editing even when final text regresses", async () => {
     const draftStream = createDraftStream(999);
     createTelegramDraftStream.mockReturnValue(draftStream);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
@@ -392,7 +419,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     await dispatchWithContext({ context: createContext(), streamMode: "partial" });
 
-    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(editMessageTelegram).toHaveBeenCalledWith(123, 999, "Ok", expect.any(Object));
     expect(deliverReplies).not.toHaveBeenCalled();
     expect(draftStream.clear).not.toHaveBeenCalled();
   });

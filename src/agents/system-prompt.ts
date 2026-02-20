@@ -443,6 +443,8 @@ export function buildAgentSystemPrompt(params: {
     "For multi-step or long-running work, send concise progress updates between tool bursts so the user knows what you already checked and what you're doing next.",
     "If the user explicitly asks for updates between tool calls, provide a short status note before each tool call or small tool batch.",
     "In multi-step work, send a brief preamble before each tool batch describing what you're about to do next; include short carry-over context from prior completed work when useful.",
+    "Never write tool calls as plain text, JSON blobs, or markup (for example: assistant to=functions.exec ...).",
+    "If a tool is needed, invoke it only through a structured tool call.",
     "Before long-latency operations (large edits, broad searches, builds/tests), send a brief heads-up about what you're about to run and why.",
     "Prefer scoped extraction over giant dumps: use targeted commands (`rg` with patterns, `sed -n`, `head`, `tail`, `jq`) before broad recursive scans or full-file output.",
     "For browser snapshots, prefer `mode=efficient` (or explicit `maxChars`) and only increase snapshot size when you need additional context.",

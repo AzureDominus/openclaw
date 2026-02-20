@@ -389,7 +389,7 @@ describe("overflow compaction in run loop", () => {
       )
       .mockResolvedValueOnce(
         makeAttemptResult({
-          assistantTexts: ["OPENCLAW_STOP_REASON: completed\nDone."],
+          assistantTexts: ["Done.\nOPENCLAW_STOP_REASON: completed"],
           lastAssistant: { stopReason: "end_turn" } as EmbeddedRunAttemptResult["lastAssistant"],
           toolMetas: [],
         }),
@@ -447,6 +447,61 @@ describe("overflow compaction in run loop", () => {
     );
   });
 
+  it("retries with continue guard when assistant emits a plain-text pseudo tool call", async () => {
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: [
+            'Working.\nassistant to=functions.exec\n{"command":"pwd","workdir":"/tmp"}',
+          ],
+          lastAssistant: { stopReason: "end_turn" } as EmbeddedRunAttemptResult["lastAssistant"],
+          toolMetas: [],
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: ["Done.\nOPENCLAW_STOP_REASON: completed"],
+          lastAssistant: { stopReason: "end_turn" } as EmbeddedRunAttemptResult["lastAssistant"],
+          toolMetas: [],
+        }),
+      );
+
+    const result = await runEmbeddedPiAgent(baseParams);
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(mockedRunEmbeddedAttempt.mock.calls[1]?.[0]?.prompt ?? "").toContain(
+      "Do not write tool calls as plain text",
+    );
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("invalid plain-text tool call"));
+    expect(result.meta.stopReasonDetail).toBe("completed");
+  });
+
+  it("retries with continue guard when tools were called earlier but final end_turn has no stop reason", async () => {
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: ["Working on it."],
+          lastAssistant: { stopReason: "end_turn" } as EmbeddedRunAttemptResult["lastAssistant"],
+          toolMetas: [{ toolName: "read" }],
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: ["OPENCLAW_STOP_REASON: completed"],
+          lastAssistant: { stopReason: "end_turn" } as EmbeddedRunAttemptResult["lastAssistant"],
+          toolMetas: [],
+        }),
+      );
+
+    const result = await runEmbeddedPiAgent(baseParams);
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(mockedRunEmbeddedAttempt.mock.calls[1]?.[0]?.prompt ?? "").toContain(
+      "SYSTEM CONTINUE GUARD (1/3)",
+    );
+    expect(result.meta.stopReasonDetail).toBe("completed");
+  });
+
   it("surfaces continue guard retries as chat payload notices for internal UI channel", async () => {
     mockedRunEmbeddedAttempt
       .mockResolvedValueOnce(
@@ -458,7 +513,7 @@ describe("overflow compaction in run loop", () => {
       )
       .mockResolvedValueOnce(
         makeAttemptResult({
-          assistantTexts: ["OPENCLAW_STOP_REASON: completed\nDone."],
+          assistantTexts: ["Done.\nOPENCLAW_STOP_REASON: completed"],
           lastAssistant: { stopReason: "end_turn" } as EmbeddedRunAttemptResult["lastAssistant"],
           toolMetas: [],
         }),
@@ -475,7 +530,7 @@ describe("overflow compaction in run loop", () => {
     ).toBe(true);
   });
 
-  it("suppresses partial stream callbacks during continue-guard retries and preserves prior reply when completion is marker-only", async () => {
+  it("filters marker-only partial callbacks during continue-guard retries and preserves prior reply when completion is marker-only", async () => {
     mockedBuildEmbeddedRunPayloads.mockImplementation((params) =>
       (params.assistantTexts ?? []).map((text) => ({ text })),
     );
@@ -505,9 +560,80 @@ describe("overflow compaction in run loop", () => {
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expect(mockedRunEmbeddedAttempt.mock.calls[1]?.[0]?.onPartialReply).toBeUndefined();
+    expect(mockedRunEmbeddedAttempt.mock.calls[1]?.[0]?.onPartialReply).toEqual(
+      expect.any(Function),
+    );
     expect(onPartialReply).toHaveBeenCalledTimes(1);
     expect(result.payloads?.[0]?.text).toBe("First answer.");
     expect(result.meta.stopReasonDetail).toBe("completed");
+  });
+
+  it("keeps progress partial callbacks enabled during continue-guard retries", async () => {
+    mockedBuildEmbeddedRunPayloads.mockImplementation((params) =>
+      (params.assistantTexts ?? []).map((text) => ({ text })),
+    );
+    const onPartialReply = vi.fn();
+
+    mockedRunEmbeddedAttempt
+      .mockImplementationOnce(async (params) => {
+        await params.onPartialReply?.({ text: "First answer." });
+        return makeAttemptResult({
+          assistantTexts: ["First answer."],
+          lastAssistant: { stopReason: "end_turn" } as EmbeddedRunAttemptResult["lastAssistant"],
+          toolMetas: [],
+        });
+      })
+      .mockImplementationOnce(async (params) => {
+        await params.onPartialReply?.({ text: "Still working." });
+        await params.onPartialReply?.({ text: "OPENCLAW_STOP_REASON: completed" });
+        return makeAttemptResult({
+          assistantTexts: ["OPENCLAW_STOP_REASON: completed"],
+          lastAssistant: { stopReason: "end_turn" } as EmbeddedRunAttemptResult["lastAssistant"],
+          toolMetas: [],
+        });
+      });
+
+    await runEmbeddedPiAgent({
+      ...baseParams,
+      onPartialReply,
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(onPartialReply).toHaveBeenCalledTimes(2);
+    expect(onPartialReply).toHaveBeenNthCalledWith(1, { text: "First answer." });
+    expect(onPartialReply).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ text: "Still working." }),
+    );
+  });
+
+  it("does not preserve malformed pseudo tool-call text as continue-guard fallback payload", async () => {
+    mockedBuildEmbeddedRunPayloads.mockImplementation((params) =>
+      (params.assistantTexts ?? []).map((text) => ({ text })),
+    );
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: [
+            'Progress update.\nassistant to=functions.exec\n{"command":"pwd","workdir":"/tmp"}',
+          ],
+          lastAssistant: { stopReason: "end_turn" } as EmbeddedRunAttemptResult["lastAssistant"],
+          toolMetas: [],
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: ["OPENCLAW_STOP_REASON: completed"],
+          lastAssistant: { stopReason: "end_turn" } as EmbeddedRunAttemptResult["lastAssistant"],
+          toolMetas: [],
+        }),
+      );
+
+    const result = await runEmbeddedPiAgent(baseParams);
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(
+      result.payloads?.some((payload) => (payload.text ?? "").includes("assistant to=functions.")),
+    ).toBe(false);
   });
 });
