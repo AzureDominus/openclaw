@@ -47,6 +47,14 @@ function normalizeDraftTextForDedup(text?: string): string {
   return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
 }
 
+function normalizePartialDraftText(text?: string): string {
+  if (typeof text !== "string") {
+    return "";
+  }
+  // Never expose trailing internal stop markers in streamed Telegram previews.
+  return stripDeclaredStopReasonLine(text);
+}
+
 function isLikelyRegressiveFinalEdit(params: {
   currentPreviewText: string;
   finalText: string;
@@ -72,6 +80,7 @@ function isLikelyRegressiveFinalEdit(params: {
   }
   return true;
 }
+
 async function resolveStickerVisionSupport(cfg: OpenClawConfig, agentId: string) {
   try {
     const catalog = await loadModelCatalog({ config: cfg });
@@ -235,11 +244,12 @@ export const dispatchTelegramMessage = async ({
     lane.hasStreamedMessage = false;
   };
   const updateDraftFromPartial = (lane: DraftLaneState, text: string | undefined) => {
+    const normalizedText = normalizePartialDraftText(text);
     const laneStream = lane.stream;
-    if (!laneStream || !text) {
+    if (!laneStream || !normalizedText) {
       return;
     }
-    if (text === lane.lastPartialText) {
+    if (normalizedText === lane.lastPartialText) {
       return;
     }
     // Mark that we've received streaming content (for forceNewMessage decision).
@@ -249,13 +259,13 @@ export const dispatchTelegramMessage = async ({
     // visible punctuation flicker.
     if (
       lane.lastPartialText &&
-      lane.lastPartialText.startsWith(text) &&
-      text.length < lane.lastPartialText.length
+      lane.lastPartialText.startsWith(normalizedText) &&
+      normalizedText.length < lane.lastPartialText.length
     ) {
       return;
     }
-    lane.lastPartialText = text;
-    laneStream.update(text);
+    lane.lastPartialText = normalizedText;
+    laneStream.update(normalizedText);
   };
   const ingestDraftLaneSegments = (text: string | undefined) => {
     for (const segment of splitTextIntoLaneSegments(text)) {
