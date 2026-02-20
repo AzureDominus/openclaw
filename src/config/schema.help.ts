@@ -322,6 +322,10 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.humanDelay.mode": 'Delay style for block replies ("off", "natural", "custom").',
   "agents.defaults.humanDelay.minMs": "Minimum delay in ms for custom humanDelay (default: 800).",
   "agents.defaults.humanDelay.maxMs": "Maximum delay in ms for custom humanDelay (default: 2500).",
+  "agents.defaults.continueGuardRetries":
+    "Max continue-guard retries when a turn ends without a tool call and without a valid OPENCLAW_STOP_REASON tag (default: 3; 0 disables).",
+  "agents.list.*.continueGuardRetries":
+    "Per-agent override for continue-guard retries (default/inherited from agents.defaults.continueGuardRetries).",
   "commands.native":
     "Register native commands with channels that support it (Discord/Slack/Telegram).",
   "commands.nativeSkills":
