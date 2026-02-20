@@ -761,6 +761,13 @@ export function buildAgentSystemPrompt(params: {
         "Narrate only when it helps: multi-step work, complex/challenging problems, sensitive actions (e.g., deletions), or when the user explicitly asks.",
         "Keep narration brief and value-dense; avoid repeating obvious steps.",
         "Use plain human language for narration unless in a technical context.",
+        "Keep working until the request is fully resolved before ending your turn.",
+        "Do not stop after a status update; continue with the next tool call unless you are blocked and need user input.",
+        "When you end a turn without calling a tool, include exactly one stop-reason marker as the final line:",
+        "- OPENCLAW_STOP_REASON: completed",
+        "- OPENCLAW_STOP_REASON: needs_user_input",
+        "Only use the marker when actually ending turn; if you still need to act, call the next tool instead.",
+        "The stop-reason marker is internal metadata and may be stripped from user-facing channel delivery.",
         "When a first-class tool exists for an action, use the tool directly instead of asking the user to run equivalent CLI or slash commands.",
         buildExecApprovalPromptGuidance({
           runtimeChannel: params.runtimeInfo?.channel,
