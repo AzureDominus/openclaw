@@ -1,13 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { expectInboundContextContract } from "../../../test/helpers/inbound-contract.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { defaultRuntime } from "../../runtime.js";
 import type { MsgContext } from "../templating.js";
+import type { FollowupRun, QueueSettings } from "./queue.js";
+import { expectInboundContextContract } from "../../../test/helpers/inbound-contract.js";
+import { defaultRuntime } from "../../runtime.js";
 import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../tokens.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { parseLineDirectives, hasLineDirectives } from "./line-directives.js";
-import type { FollowupRun, QueueSettings } from "./queue.js";
 import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { createReplyToModeFilter, resolveReplyToMode } from "./reply-threading.js";
@@ -1201,6 +1201,22 @@ describe("createReplyDispatcher", () => {
     expect(deliver).toHaveBeenCalledTimes(2);
 
     vi.useRealTimers();
+  });
+
+  it("strips OPENCLAW_STOP_REASON marker when dispatcher strip option is enabled", async () => {
+    const deliver = vi.fn().mockResolvedValue(undefined);
+    const dispatcher = createReplyDispatcher({
+      deliver,
+      stripStopReasonMarker: true,
+    });
+
+    dispatcher.sendFinalReply({
+      text: "OPENCLAW_STOP_REASON: completed\n\nAll done.",
+    });
+    await dispatcher.waitForIdle();
+
+    expect(deliver).toHaveBeenCalledTimes(1);
+    expect(deliver.mock.calls[0]?.[0]?.text).toBe("All done.");
   });
 });
 

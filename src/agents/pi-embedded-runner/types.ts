@@ -46,6 +46,8 @@ export type EmbeddedPiRunMeta = {
   };
   /** Stop reason for the agent run (e.g., "completed", "tool_calls"). */
   stopReason?: string;
+  /** Structured stop reason declared by the model when ending a turn. */
+  stopReasonDetail?: "completed" | "needs_user_input";
   /** Pending tool calls when stopReason is "tool_calls". */
   pendingToolCalls?: Array<{
     id: string;

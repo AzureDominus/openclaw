@@ -1,6 +1,6 @@
-import path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
+import path from "node:path";
 import type { ExecAsk, ExecHost, ExecSecurity } from "../infra/exec-approvals.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { isDangerousHostEnvVarName } from "../infra/host-env-security.js";
@@ -10,8 +10,8 @@ import type { ProcessSession } from "./bash-process-registry.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 export { applyPathPrepend, normalizePathPrepend } from "../infra/path-prepend.js";
-import { logWarn } from "../logger.js";
 import type { ManagedRun } from "../process/supervisor/index.js";
+import { logWarn } from "../logger.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import {
   addSession,
@@ -53,13 +53,13 @@ export function validateHostEnv(env: Record<string, string>): void {
 }
 export const DEFAULT_MAX_OUTPUT = clampWithDefault(
   readEnvInt("PI_BASH_MAX_OUTPUT_CHARS"),
-  200_000,
+  40_000,
   1_000,
   200_000,
 );
 export const DEFAULT_PENDING_MAX_OUTPUT = clampWithDefault(
   readEnvInt("OPENCLAW_BASH_PENDING_MAX_OUTPUT_CHARS"),
-  30_000,
+  10_000,
   1_000,
   200_000,
 );
@@ -126,6 +126,9 @@ export type ExecProcessOutcome = {
   exitSignal: NodeJS.Signals | number | null;
   durationMs: number;
   aggregated: string;
+  truncated: boolean;
+  totalOutputChars: number;
+  outputCapChars: number;
   timedOut: boolean;
   reason?: string;
 };
@@ -499,6 +502,9 @@ export async function runExecProcess(opts: {
           exitSignal: exit.exitSignal,
           durationMs,
           aggregated: aggregated + exitMsg,
+          truncated: session.truncated,
+          totalOutputChars: session.totalOutputChars,
+          outputCapChars: opts.maxOutput,
           timedOut: false,
         };
       }
@@ -516,6 +522,9 @@ export async function runExecProcess(opts: {
         exitSignal: exit.exitSignal,
         durationMs,
         aggregated,
+        truncated: session.truncated,
+        totalOutputChars: session.totalOutputChars,
+        outputCapChars: opts.maxOutput,
         timedOut: exit.timedOut,
         reason: aggregated ? `${aggregated}\n\n${reason}` : reason,
       };
@@ -531,6 +540,9 @@ export async function runExecProcess(opts: {
         exitSignal: null,
         durationMs: Date.now() - startedAt,
         aggregated,
+        truncated: session.truncated,
+        totalOutputChars: session.totalOutputChars,
+        outputCapChars: opts.maxOutput,
         timedOut: false,
         reason: message,
       };

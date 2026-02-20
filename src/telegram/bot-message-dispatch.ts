@@ -543,6 +543,7 @@ export const dispatchTelegramMessage = async ({
       cfg,
       dispatcherOptions: {
         ...prefixOptions,
+        stripStopReasonMarker: true,
         deliver: async (payload, info) => {
           const previewButtons = (
             payload.channelData?.telegram as { buttons?: TelegramInlineButtons } | undefined

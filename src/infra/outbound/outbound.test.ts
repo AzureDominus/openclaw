@@ -2,9 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/config.js";
+import type { OutboundDeliveryJson } from "./format.js";
 import { telegramPlugin } from "../../../extensions/telegram/src/channel.js";
 import { whatsappPlugin } from "../../../extensions/whatsapp/src/channel.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
@@ -20,7 +21,6 @@ import {
 } from "./delivery-queue.js";
 import { DirectoryCache } from "./directory-cache.js";
 import { buildOutboundResultEnvelope } from "./envelope.js";
-import type { OutboundDeliveryJson } from "./format.js";
 import {
   buildOutboundDeliveryJson,
   formatGatewaySummary,
@@ -788,6 +788,13 @@ describe("normalizeOutboundPayloads", () => {
     const channelData = { line: { flexMessage: { altText: "Card", contents: {} } } };
     const normalized = normalizeOutboundPayloads([{ channelData }]);
     expect(normalized).toEqual([{ text: "", mediaUrls: [], channelData }]);
+  });
+
+  it("strips OPENCLAW_STOP_REASON marker before outbound delivery", () => {
+    const normalized = normalizeOutboundPayloads([
+      { text: "OPENCLAW_STOP_REASON: completed\n\nDelivered text." },
+    ]);
+    expect(normalized).toEqual([{ text: "Delivered text.", mediaUrls: [] }]);
   });
 });
 

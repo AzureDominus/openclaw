@@ -319,4 +319,14 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads[0]?.isError).toBe(true);
     expect(payloads[0]?.text).toContain("connection timeout");
   });
+
+  it("keeps OPENCLAW_STOP_REASON marker in raw model payload output", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["OPENCLAW_STOP_REASON: completed\n\nAll done."],
+      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toContain("OPENCLAW_STOP_REASON: completed");
+  });
 });
