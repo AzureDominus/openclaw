@@ -11,6 +11,12 @@ type EmbeddedPiQueueHandle = {
   abort: () => void;
 };
 
+export type QueueEmbeddedPiMessageResult =
+  | { status: "queued" }
+  | { status: "no-active" }
+  | { status: "inactive" }
+  | { status: "error"; error: string };
+
 const ACTIVE_EMBEDDED_RUNS = new Map<string, EmbeddedPiQueueHandle>();
 type EmbeddedRunWaiter = {
   resolve: (ended: boolean) => void;
@@ -18,23 +24,24 @@ type EmbeddedRunWaiter = {
 };
 const EMBEDDED_RUN_WAITERS = new Map<string, Set<EmbeddedRunWaiter>>();
 
-export function queueEmbeddedPiMessage(sessionId: string, text: string): boolean {
+export async function queueEmbeddedPiMessage(
+  sessionId: string,
+  text: string,
+): Promise<QueueEmbeddedPiMessageResult> {
   const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
   if (!handle) {
     diag.debug(`queue message failed: sessionId=${sessionId} reason=no_active_run`);
-    return false;
+    return { status: "no-active" };
   }
-  if (!handle.isStreaming()) {
-    diag.debug(`queue message failed: sessionId=${sessionId} reason=not_streaming`);
-    return false;
+  try {
+    logMessageQueued({ sessionId, source: "pi-embedded-runner" });
+    await handle.queueMessage(text);
+    return { status: "queued" };
+  } catch (error) {
+    const err = error instanceof Error ? error.message : String(error);
+    diag.warn(`queue message failed: sessionId=${sessionId} reason=error error=${err}`);
+    return { status: "error", error: err };
   }
-  if (handle.isCompacting()) {
-    diag.debug(`queue message failed: sessionId=${sessionId} reason=compacting`);
-    return false;
-  }
-  logMessageQueued({ sessionId, source: "pi-embedded-runner" });
-  void handle.queueMessage(text);
-  return true;
 }
 
 export function abortEmbeddedPiRun(sessionId: string): boolean {
