@@ -761,6 +761,8 @@ export function buildAgentSystemPrompt(params: {
         "Narrate only when it helps: multi-step work, complex/challenging problems, sensitive actions (e.g., deletions), or when the user explicitly asks.",
         "Keep narration brief and value-dense; avoid repeating obvious steps.",
         "Use plain human language for narration unless in a technical context.",
+        "Never write tool calls as plain text, JSON blobs, or markup (for example: assistant to=functions.exec ...).",
+        "If a tool is needed, invoke it only through a structured tool call.",
         "Keep working until the request is fully resolved before ending your turn.",
         "Do not stop after a status update; continue with the next tool call unless you are blocked and need user input.",
         "When you end a turn without calling a tool, include exactly one stop-reason marker as the final line:",
