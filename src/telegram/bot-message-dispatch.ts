@@ -6,6 +6,7 @@ import {
   modelSupportsVision,
 } from "../agents/model-catalog.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
+import { stripDeclaredStopReasonLine } from "../agents/stop-reason.js";
 import { resolveChunkMode } from "../auto-reply/chunk.js";
 import { clearHistoryEntriesIfEnabled } from "../auto-reply/reply/history.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
@@ -39,6 +40,38 @@ const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 /** Minimum chars before sending first streaming message (improves push notification UX) */
 const DRAFT_MIN_INITIAL_CHARS = 30;
 
+function normalizeDraftTextForDedup(text?: string): string {
+  if (typeof text !== "string") {
+    return "";
+  }
+  return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+}
+
+function isLikelyRegressiveFinalEdit(params: {
+  currentPreviewText: string;
+  finalText: string;
+}): boolean {
+  const { currentPreviewText, finalText } = params;
+  if (!currentPreviewText || !finalText) {
+    return false;
+  }
+  if (finalText.length >= currentPreviewText.length) {
+    return false;
+  }
+  if (!currentPreviewText.startsWith(finalText)) {
+    return false;
+  }
+
+  // Allow shortening when the only removed suffix is the internal stop-reason marker.
+  const normalizedCurrentWithoutStopReason = normalizeDraftTextForDedup(
+    stripDeclaredStopReasonLine(currentPreviewText),
+  );
+  const normalizedFinal = normalizeDraftTextForDedup(finalText);
+  if (normalizedCurrentWithoutStopReason === normalizedFinal) {
+    return false;
+  }
+  return true;
+}
 async function resolveStickerVisionSupport(cfg: OpenClawConfig, agentId: string) {
   try {
     const catalog = await loadModelCatalog({ config: cfg });
@@ -388,8 +421,10 @@ export const dispatchTelegramMessage = async ({
     const currentPreviewText = previewTextSnapshot ?? getLanePreviewText(lane);
     const shouldSkipRegressive =
       Boolean(currentPreviewText) &&
-      currentPreviewText.startsWith(text) &&
-      text.length < currentPreviewText.length &&
+      isLikelyRegressiveFinalEdit({
+        currentPreviewText,
+        finalText: text,
+      }) &&
       (skipRegressive === "always" || hadPreviewMessage);
     if (shouldSkipRegressive) {
       // Avoid regressive punctuation/wording flicker from occasional shorter finals.
