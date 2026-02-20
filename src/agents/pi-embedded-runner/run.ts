@@ -1,3 +1,4 @@
+import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
@@ -10,7 +11,10 @@ import { generateSecureToken } from "../../infra/secure-random.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookBeforeAgentStartResult } from "../../plugins/types.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
-import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
+import {
+  INTERNAL_MESSAGE_CHANNEL,
+  isMarkdownCapableMessageChannel,
+} from "../../utils/message-channel.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { hasConfiguredModelFallbacks } from "../agent-scope.js";
 import {
@@ -55,6 +59,7 @@ import {
   type FailoverReason,
 } from "../pi-embedded-helpers.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
+import { extractDeclaredStopReason, stripDeclaredStopReasonLine } from "../stop-reason.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
@@ -94,6 +99,10 @@ const OVERLOAD_FAILOVER_BACKOFF_POLICY: BackoffPolicy = {
 // Avoid Anthropic's refusal test token poisoning session transcripts.
 const ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
 const ANTHROPIC_MAGIC_STRING_REPLACEMENT = "ANTHROPIC MAGIC STRING TRIGGER REFUSAL (redacted)";
+const MAX_END_TURN_CONTINUE_GUARD_RETRIES = 3;
+
+type ContinueGuardStopReason = "completed" | "needs_user_input";
+type EmbeddedRunPayload = ReturnType<typeof buildEmbeddedRunPayloads>[number];
 
 function scrubAnthropicRefusalMagic(prompt: string): string {
   if (!prompt.includes(ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL)) {
@@ -249,6 +258,88 @@ function buildErrorAgentMeta(params: {
     ...(lastCallUsage ? { lastCallUsage } : {}),
     ...(promptTokens ? { promptTokens } : {}),
   };
+}
+
+function normalizeModelStopReason(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  return normalized || undefined;
+}
+
+function shouldGuardOnEndTurn(stopReason: string | undefined): boolean {
+  if (!stopReason) {
+    return true;
+  }
+  if (
+    stopReason === "tooluse" ||
+    stopReason === "tool_use" ||
+    stopReason === "tool_calls" ||
+    stopReason === "error" ||
+    stopReason === "aborted"
+  ) {
+    return false;
+  }
+  return stopReason === "stop" || stopReason === "end_turn" || stopReason === "endturn";
+}
+
+function buildContinueGuardPrompt(attempt: number): string {
+  return [
+    `SYSTEM CONTINUE GUARD (${attempt}/${MAX_END_TURN_CONTINUE_GUARD_RETRIES}):`,
+    "Your previous assistant turn ended without calling a tool.",
+    "If you are done, start your response with exactly: OPENCLAW_STOP_REASON: completed",
+    "If you need user input to continue, start with exactly: OPENCLAW_STOP_REASON: needs_user_input",
+    "If you are not done and do not need user input, do not end turn; call the next tool now.",
+    "Empty or invalid stop reasons are not allowed.",
+  ].join("\n");
+}
+
+function hasDeliverablePayloadAfterStopReasonStrip(payload: EmbeddedRunPayload): boolean {
+  const strippedText =
+    typeof payload.text === "string" ? stripDeclaredStopReasonLine(payload.text) : "";
+  if (strippedText.trim().length > 0) {
+    return true;
+  }
+  if ((payload.mediaUrls?.length ?? 0) > 0) {
+    return true;
+  }
+  if (typeof payload.mediaUrl === "string" && payload.mediaUrl.trim().length > 0) {
+    return true;
+  }
+  return false;
+}
+
+function hasAnyDeliverablePayloadAfterStopReasonStrip(payloads: EmbeddedRunPayload[]): boolean {
+  return payloads.some((payload) => hasDeliverablePayloadAfterStopReasonStrip(payload));
+}
+
+async function appendStopReasonSessionLog(params: {
+  sessionFile: string;
+  runId: string;
+  modelStopReason: string;
+  declaredStopReason?: ContinueGuardStopReason;
+  continueGuardRetries: number;
+  hadToolCalls: boolean;
+}): Promise<void> {
+  try {
+    await fs.access(params.sessionFile);
+  } catch {
+    return;
+  }
+  try {
+    const manager = SessionManager.open(params.sessionFile);
+    manager.appendCustomEntry("openclaw:stop-reason", {
+      timestamp: Date.now(),
+      runId: params.runId,
+      modelStopReason: params.modelStopReason,
+      declaredStopReason: params.declaredStopReason ?? null,
+      continueGuardRetries: params.continueGuardRetries,
+      hadToolCalls: params.hadToolCalls,
+    });
+  } catch (err) {
+    log.warn(`failed to append stop reason entry: ${String(err)}`);
+  }
 }
 
 export async function runEmbeddedPiAgent(
@@ -432,6 +523,7 @@ export async function runEmbeddedPiAgent(
         : profileOrder.length > 0
           ? profileOrder
           : [undefined];
+      const MAX_RUN_LOOP_ITERATIONS = resolveMaxRunRetryIterations(profileCandidates.length);
       let profileIndex = 0;
 
       const initialThinkLevel = params.thinkLevel ?? "off";
@@ -735,7 +827,6 @@ export async function runEmbeddedPiAgent(
       };
 
       const MAX_OVERFLOW_COMPACTION_ATTEMPTS = 3;
-      const MAX_RUN_LOOP_ITERATIONS = resolveMaxRunRetryIterations(profileCandidates.length);
       let overflowCompactionAttempts = 0;
       let toolResultTruncationAttempted = false;
       let bootstrapPromptWarningSignaturesSeen =
@@ -746,6 +837,13 @@ export async function runEmbeddedPiAgent(
       let autoCompactionCount = 0;
       let runLoopIterations = 0;
       let overloadFailoverAttempts = 0;
+      let continueGuardRetries = 0;
+      let continueGuardPrompt: string | undefined;
+      let continueGuardFallbackPayloads: EmbeddedRunPayload[] | undefined;
+      const continueGuardNotices: string[] = [];
+      const shouldSurfaceContinueGuardNotice =
+        params.messageChannel === INTERNAL_MESSAGE_CHANNEL ||
+        params.messageProvider === INTERNAL_MESSAGE_CHANNEL;
       const maybeMarkAuthProfileFailure = async (failure: {
         profileId?: string;
         reason?: AuthProfileFailureReason | null;
@@ -841,8 +939,11 @@ export async function runEmbeddedPiAgent(
           attemptedThinking.add(thinkLevel);
           await fs.mkdir(resolvedWorkspace, { recursive: true });
 
+          const isContinueGuardAttempt = Boolean(continueGuardPrompt);
+          const promptText = continueGuardPrompt ?? params.prompt;
+          continueGuardPrompt = undefined;
           const prompt =
-            provider === "anthropic" ? scrubAnthropicRefusalMagic(params.prompt) : params.prompt;
+            provider === "anthropic" ? scrubAnthropicRefusalMagic(promptText) : promptText;
 
           const attempt = await runEmbeddedAttempt({
             sessionId: params.sessionId,
@@ -897,14 +998,16 @@ export async function runEmbeddedPiAgent(
             abortSignal: params.abortSignal,
             shouldEmitToolResult: params.shouldEmitToolResult,
             shouldEmitToolOutput: params.shouldEmitToolOutput,
-            onPartialReply: params.onPartialReply,
-            onAssistantMessageStart: params.onAssistantMessageStart,
-            onBlockReply: params.onBlockReply,
-            onBlockReplyFlush: params.onBlockReplyFlush,
+            onPartialReply: isContinueGuardAttempt ? undefined : params.onPartialReply,
+            onAssistantMessageStart: isContinueGuardAttempt
+              ? undefined
+              : params.onAssistantMessageStart,
+            onBlockReply: isContinueGuardAttempt ? undefined : params.onBlockReply,
+            onBlockReplyFlush: isContinueGuardAttempt ? undefined : params.onBlockReplyFlush,
             blockReplyBreak: params.blockReplyBreak,
             blockReplyChunking: params.blockReplyChunking,
-            onReasoningStream: params.onReasoningStream,
-            onReasoningEnd: params.onReasoningEnd,
+            onReasoningStream: isContinueGuardAttempt ? undefined : params.onReasoningStream,
+            onReasoningEnd: isContinueGuardAttempt ? undefined : params.onReasoningEnd,
             onToolResult: params.onToolResult,
             onAgentEvent: params.onAgentEvent,
             extraSystemPrompt: params.extraSystemPrompt,
@@ -1385,6 +1488,53 @@ export async function runEmbeddedPiAgent(
           if (usage && lastTurnTotal && lastTurnTotal > 0) {
             usage.total = lastTurnTotal;
           }
+          const modelStopReason = normalizeModelStopReason(lastAssistant?.stopReason);
+          const declaredStopReason = extractDeclaredStopReason({
+            assistantTexts: attempt.assistantTexts ?? [],
+            lastAssistant: attempt.lastAssistant,
+          });
+          const hadToolCallsThisAttempt =
+            (attempt.toolMetas?.length ?? 0) > 0 || Boolean(attempt.clientToolCall);
+          const shouldRetryForMissingStopReason =
+            !aborted &&
+            !timedOut &&
+            Boolean(lastAssistant) &&
+            !hadToolCallsThisAttempt &&
+            shouldGuardOnEndTurn(modelStopReason) &&
+            !declaredStopReason &&
+            continueGuardRetries < MAX_END_TURN_CONTINUE_GUARD_RETRIES;
+          if (shouldRetryForMissingStopReason) {
+            const candidatePayloads = buildEmbeddedRunPayloads({
+              assistantTexts: attempt.assistantTexts ?? [],
+              toolMetas: attempt.toolMetas ?? [],
+              lastAssistant: attempt.lastAssistant,
+              lastToolError: attempt.lastToolError,
+              config: params.config,
+              sessionKey: params.sessionKey ?? params.sessionId,
+              provider: activeErrorContext.provider,
+              model: activeErrorContext.model,
+              verboseLevel: params.verboseLevel,
+              reasoningLevel: params.reasoningLevel,
+              toolResultFormat: resolvedToolResultFormat,
+              suppressToolErrorWarnings: params.suppressToolErrorWarnings,
+              inlineToolResultsAllowed: false,
+              didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+            });
+            if (hasAnyDeliverablePayloadAfterStopReasonStrip(candidatePayloads)) {
+              continueGuardFallbackPayloads = candidatePayloads;
+            }
+            continueGuardRetries += 1;
+            continueGuardPrompt = buildContinueGuardPrompt(continueGuardRetries);
+            log.warn(
+              `continue guard retry ${continueGuardRetries}/${MAX_END_TURN_CONTINUE_GUARD_RETRIES} for run ${params.runId}: missing/invalid OPENCLAW_STOP_REASON`,
+            );
+            if (shouldSurfaceContinueGuardNotice) {
+              continueGuardNotices.push(
+                `Continue guard ${continueGuardRetries}/${MAX_END_TURN_CONTINUE_GUARD_RETRIES}: model ended turn without tool call or valid OPENCLAW_STOP_REASON. Retrying.`,
+              );
+            }
+            continue;
+          }
           // Extract the last individual API call's usage for context-window
           // utilization display. The accumulated `usage` sums input tokens
           // across all calls (tool-use loops, compaction retries), which
@@ -1402,9 +1552,9 @@ export async function runEmbeddedPiAgent(
             compactionCount: autoCompactionCount > 0 ? autoCompactionCount : undefined,
           };
 
-          const payloads = buildEmbeddedRunPayloads({
-            assistantTexts: attempt.assistantTexts,
-            toolMetas: attempt.toolMetas,
+          let payloads = buildEmbeddedRunPayloads({
+            assistantTexts: attempt.assistantTexts ?? [],
+            toolMetas: attempt.toolMetas ?? [],
             lastAssistant: attempt.lastAssistant,
             lastToolError: attempt.lastToolError,
             config: params.config,
@@ -1418,6 +1568,20 @@ export async function runEmbeddedPiAgent(
             inlineToolResultsAllowed: false,
             didSendViaMessagingTool: attempt.didSendViaMessagingTool,
           });
+          if (
+            !hasAnyDeliverablePayloadAfterStopReasonStrip(payloads) &&
+            continueGuardFallbackPayloads &&
+            hasAnyDeliverablePayloadAfterStopReasonStrip(continueGuardFallbackPayloads)
+          ) {
+            // Continue-guard retries can end with a stop-reason-only marker. Preserve the last
+            // user-facing pre-guard reply so channel delivery doesn't drop to empty.
+            payloads = shouldSurfaceContinueGuardNotice
+              ? [...continueGuardFallbackPayloads, ...payloads]
+              : [...continueGuardFallbackPayloads];
+          }
+          if (shouldSurfaceContinueGuardNotice && continueGuardNotices.length > 0) {
+            payloads = [...continueGuardNotices.map((text) => ({ text })), ...payloads];
+          }
 
           // Timeout aborts can leave the run without any assistant payloads.
           // Emit an explicit timeout error instead of silently completing, so
@@ -1462,6 +1626,17 @@ export async function runEmbeddedPiAgent(
               agentDir: params.agentDir,
             });
           }
+          const finalStopReason = attempt.clientToolCall
+            ? "tool_calls"
+            : (modelStopReason ?? "end_turn");
+          await appendStopReasonSessionLog({
+            sessionFile: params.sessionFile,
+            runId: params.runId,
+            modelStopReason: finalStopReason,
+            declaredStopReason,
+            continueGuardRetries,
+            hadToolCalls: hadToolCallsThisAttempt,
+          });
           return {
             payloads: payloads.length ? payloads : undefined,
             meta: {
@@ -1469,12 +1644,9 @@ export async function runEmbeddedPiAgent(
               agentMeta,
               aborted,
               systemPromptReport: attempt.systemPromptReport,
-              // Handle client tool calls (OpenResponses hosted tools)
-              // Propagate the LLM stop reason so callers (lifecycle events,
-              // ACP bridge) can distinguish end_turn from max_tokens.
-              stopReason: attempt.clientToolCall
-                ? "tool_calls"
-                : (lastAssistant?.stopReason as string | undefined),
+              // Handle client tool calls (OpenResponses hosted tools).
+              stopReason: finalStopReason,
+              stopReasonDetail: declaredStopReason,
               pendingToolCalls: attempt.clientToolCall
                 ? [
                     {

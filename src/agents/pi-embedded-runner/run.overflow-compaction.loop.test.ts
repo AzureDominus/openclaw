@@ -1,43 +1,27 @@
 import "./run.overflow-compaction.mocks.shared.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { isCompactionFailureError, isLikelyContextOverflowError } from "../pi-embedded-helpers.js";
 
 vi.mock("../../utils.js", () => ({
   resolveUserPath: vi.fn((p: string) => p),
 }));
 
-import { log } from "./logger.js";
-import { runEmbeddedPiAgent } from "./run.js";
-import {
-  makeAttemptResult,
-  makeCompactionSuccess,
-  makeOverflowError,
-  mockOverflowRetrySuccess,
-  queueOverflowAttemptWithOversizedToolOutput,
-} from "./run.overflow-compaction.fixture.js";
-import {
-  mockedCompactDirect,
-  mockedRunEmbeddedAttempt,
-  mockedSessionLikelyHasOversizedToolResults,
-  mockedTruncateOversizedToolResultsInSession,
-  overflowBaseRunParams as baseParams,
-} from "./run.overflow-compaction.shared-test.js";
-import type { EmbeddedRunAttemptResult } from "./run/types.js";
-
-const mockedIsCompactionFailureError = vi.mocked(isCompactionFailureError);
-const mockedIsLikelyContextOverflowError = vi.mocked(isLikelyContextOverflowError);
-
-describe("overflow compaction in run loop", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockedIsCompactionFailureError.mockImplementation((msg?: string) => {
+vi.mock("../pi-embedded-helpers.js", async () => {
+  return {
+    isCompactionFailureError: (msg?: string) => {
       if (!msg) {
         return false;
       }
       const lower = msg.toLowerCase();
       return lower.includes("request_too_large") && lower.includes("summarization failed");
-    });
-    mockedIsLikelyContextOverflowError.mockImplementation((msg?: string) => {
+    },
+    isContextOverflowError: (msg?: string) => {
+      if (!msg) {
+        return false;
+      }
+      const lower = msg.toLowerCase();
+      return lower.includes("request_too_large") || lower.includes("request size exceeds");
+    },
+    isLikelyContextOverflowError: (msg?: string) => {
       if (!msg) {
         return false;
       }
@@ -48,12 +32,56 @@ describe("overflow compaction in run loop", () => {
         lower.includes("context window exceeded") ||
         lower.includes("prompt too large")
       );
-    });
-    mockedCompactDirect.mockResolvedValue({
-      ok: false,
-      compacted: false,
-      reason: "nothing to compact",
-    });
+    },
+    isFailoverAssistantError: vi.fn(() => false),
+    isFailoverErrorMessage: vi.fn(() => false),
+    isAuthAssistantError: vi.fn(() => false),
+    isRateLimitAssistantError: vi.fn(() => false),
+    isBillingAssistantError: vi.fn(() => false),
+    classifyFailoverReason: vi.fn(() => null),
+    formatAssistantErrorText: vi.fn(() => ""),
+    parseImageSizeError: vi.fn(() => null),
+    pickFallbackThinkingLevel: vi.fn(() => null),
+    isTimeoutErrorMessage: vi.fn(() => false),
+    parseImageDimensionError: vi.fn(() => null),
+  };
+});
+
+import type { EmbeddedRunAttemptResult } from "./run/types.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
+import { compactEmbeddedPiSessionDirect } from "./compact.js";
+import { log } from "./logger.js";
+import { runEmbeddedPiAgent } from "./run.js";
+import { makeAttemptResult, mockOverflowRetrySuccess } from "./run.overflow-compaction.fixture.js";
+import { runEmbeddedAttempt } from "./run/attempt.js";
+import { buildEmbeddedRunPayloads } from "./run/payloads.js";
+import {
+  sessionLikelyHasOversizedToolResults,
+  truncateOversizedToolResultsInSession,
+} from "./tool-result-truncation.js";
+
+const mockedRunEmbeddedAttempt = vi.mocked(runEmbeddedAttempt);
+const mockedBuildEmbeddedRunPayloads = vi.mocked(buildEmbeddedRunPayloads);
+const mockedCompactDirect = vi.mocked(compactEmbeddedPiSessionDirect);
+const mockedSessionLikelyHasOversizedToolResults = vi.mocked(sessionLikelyHasOversizedToolResults);
+const mockedTruncateOversizedToolResultsInSession = vi.mocked(
+  truncateOversizedToolResultsInSession,
+);
+
+const baseParams = {
+  sessionId: "test-session",
+  sessionKey: "test-key",
+  sessionFile: "/tmp/session.json",
+  workspaceDir: "/tmp/workspace",
+  prompt: "hello",
+  timeoutMs: 30000,
+  runId: "run-1",
+};
+
+describe("overflow compaction in run loop", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockedBuildEmbeddedRunPayloads.mockImplementation(() => []);
     mockedSessionLikelyHasOversizedToolResults.mockReturnValue(false);
     mockedTruncateOversizedToolResultsInSession.mockResolvedValue({
       truncated: false,
@@ -92,13 +120,15 @@ describe("overflow compaction in run loop", () => {
       .mockResolvedValueOnce(makeAttemptResult({ promptError: overflowHintError }))
       .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
 
-    mockedCompactDirect.mockResolvedValueOnce(
-      makeCompactionSuccess({
+    mockedCompactDirect.mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      result: {
         summary: "Compacted session",
         firstKeptEntryId: "entry-6",
         tokensBefore: 140000,
-      }),
-    );
+      },
+    });
 
     const result = await runEmbeddedPiAgent(baseParams);
 
@@ -109,7 +139,7 @@ describe("overflow compaction in run loop", () => {
   });
 
   it("returns error if compaction fails", async () => {
-    const overflowError = makeOverflowError();
+    const overflowError = new Error("request_too_large: Request size exceeds model context window");
 
     mockedRunEmbeddedAttempt.mockResolvedValue(makeAttemptResult({ promptError: overflowError }));
 
@@ -129,8 +159,21 @@ describe("overflow compaction in run loop", () => {
   });
 
   it("falls back to tool-result truncation and retries when oversized results are detected", async () => {
-    queueOverflowAttemptWithOversizedToolOutput(mockedRunEmbeddedAttempt, makeOverflowError());
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+    const overflowError = new Error("request_too_large: Request size exceeds model context window");
+
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          promptError: overflowError,
+          messagesSnapshot: [
+            {
+              role: "assistant",
+              content: "big tool output",
+            } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
 
     mockedCompactDirect.mockResolvedValueOnce({
       ok: false,
@@ -158,7 +201,7 @@ describe("overflow compaction in run loop", () => {
   });
 
   it("retries compaction up to 3 times before giving up", async () => {
-    const overflowError = makeOverflowError();
+    const overflowError = new Error("request_too_large: Request size exceeds model context window");
 
     // 4 overflow errors: 3 compaction retries + final failure
     mockedRunEmbeddedAttempt
@@ -168,27 +211,21 @@ describe("overflow compaction in run loop", () => {
       .mockResolvedValueOnce(makeAttemptResult({ promptError: overflowError }));
 
     mockedCompactDirect
-      .mockResolvedValueOnce(
-        makeCompactionSuccess({
-          summary: "Compacted 1",
-          firstKeptEntryId: "entry-3",
-          tokensBefore: 180000,
-        }),
-      )
-      .mockResolvedValueOnce(
-        makeCompactionSuccess({
-          summary: "Compacted 2",
-          firstKeptEntryId: "entry-5",
-          tokensBefore: 160000,
-        }),
-      )
-      .mockResolvedValueOnce(
-        makeCompactionSuccess({
-          summary: "Compacted 3",
-          firstKeptEntryId: "entry-7",
-          tokensBefore: 140000,
-        }),
-      );
+      .mockResolvedValueOnce({
+        ok: true,
+        compacted: true,
+        result: { summary: "Compacted 1", firstKeptEntryId: "entry-3", tokensBefore: 180000 },
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        compacted: true,
+        result: { summary: "Compacted 2", firstKeptEntryId: "entry-5", tokensBefore: 160000 },
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        compacted: true,
+        result: { summary: "Compacted 3", firstKeptEntryId: "entry-7", tokensBefore: 140000 },
+      });
 
     const result = await runEmbeddedPiAgent(baseParams);
 
@@ -201,7 +238,7 @@ describe("overflow compaction in run loop", () => {
   });
 
   it("succeeds after second compaction attempt", async () => {
-    const overflowError = makeOverflowError();
+    const overflowError = new Error("request_too_large: Request size exceeds model context window");
 
     mockedRunEmbeddedAttempt
       .mockResolvedValueOnce(makeAttemptResult({ promptError: overflowError }))
@@ -209,20 +246,16 @@ describe("overflow compaction in run loop", () => {
       .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
 
     mockedCompactDirect
-      .mockResolvedValueOnce(
-        makeCompactionSuccess({
-          summary: "Compacted 1",
-          firstKeptEntryId: "entry-3",
-          tokensBefore: 180000,
-        }),
-      )
-      .mockResolvedValueOnce(
-        makeCompactionSuccess({
-          summary: "Compacted 2",
-          firstKeptEntryId: "entry-5",
-          tokensBefore: 160000,
-        }),
-      );
+      .mockResolvedValueOnce({
+        ok: true,
+        compacted: true,
+        result: { summary: "Compacted 1", firstKeptEntryId: "entry-3", tokensBefore: 180000 },
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        compacted: true,
+        result: { summary: "Compacted 2", firstKeptEntryId: "entry-5", tokensBefore: 160000 },
+      });
 
     const result = await runEmbeddedPiAgent(baseParams);
 
@@ -260,13 +293,15 @@ describe("overflow compaction in run loop", () => {
       )
       .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
 
-    mockedCompactDirect.mockResolvedValueOnce(
-      makeCompactionSuccess({
+    mockedCompactDirect.mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      result: {
         summary: "Compacted session",
         firstKeptEntryId: "entry-5",
         tokensBefore: 150000,
-      }),
-    );
+      },
+    });
 
     const result = await runEmbeddedPiAgent(baseParams);
 
@@ -334,5 +369,145 @@ describe("overflow compaction in run loop", () => {
 
     expect(result.meta.agentMeta?.usage?.input).toBe(4_000);
     expect(result.meta.agentMeta?.promptTokens).toBe(2_000);
+  });
+
+  it("retries with continue guard when end_turn has no tools and no valid stop reason", async () => {
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: ["Checking now."],
+          lastAssistant: { stopReason: "end_turn" } as EmbeddedRunAttemptResult["lastAssistant"],
+          toolMetas: [],
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: ["Still checking."],
+          lastAssistant: { stopReason: "end_turn" } as EmbeddedRunAttemptResult["lastAssistant"],
+          toolMetas: [],
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: ["OPENCLAW_STOP_REASON: completed\nDone."],
+          lastAssistant: { stopReason: "end_turn" } as EmbeddedRunAttemptResult["lastAssistant"],
+          toolMetas: [],
+        }),
+      );
+
+    const result = await runEmbeddedPiAgent(baseParams);
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
+    expect(mockedRunEmbeddedAttempt.mock.calls[1]?.[0]?.prompt ?? "").toContain(
+      "SYSTEM CONTINUE GUARD (1/3)",
+    );
+    expect(mockedRunEmbeddedAttempt.mock.calls[2]?.[0]?.prompt ?? "").toContain(
+      "SYSTEM CONTINUE GUARD (2/3)",
+    );
+    expect(result.meta.stopReason).toBe("end_turn");
+    expect(result.meta.stopReasonDetail).toBe("completed");
+  });
+
+  it("caps continue guard retries at three", async () => {
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: ["Checking step 1."],
+          lastAssistant: { stopReason: "end_turn" } as EmbeddedRunAttemptResult["lastAssistant"],
+          toolMetas: [],
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: ["Checking step 2."],
+          lastAssistant: { stopReason: "end_turn" } as EmbeddedRunAttemptResult["lastAssistant"],
+          toolMetas: [],
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: ["Checking step 3."],
+          lastAssistant: { stopReason: "end_turn" } as EmbeddedRunAttemptResult["lastAssistant"],
+          toolMetas: [],
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: ["Checking step 4."],
+          lastAssistant: { stopReason: "end_turn" } as EmbeddedRunAttemptResult["lastAssistant"],
+          toolMetas: [],
+        }),
+      );
+
+    await runEmbeddedPiAgent(baseParams);
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(4);
+    expect(mockedRunEmbeddedAttempt.mock.calls[3]?.[0]?.prompt ?? "").toContain(
+      "SYSTEM CONTINUE GUARD (3/3)",
+    );
+  });
+
+  it("surfaces continue guard retries as chat payload notices for internal UI channel", async () => {
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: ["Checking now."],
+          lastAssistant: { stopReason: "end_turn" } as EmbeddedRunAttemptResult["lastAssistant"],
+          toolMetas: [],
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: ["OPENCLAW_STOP_REASON: completed\nDone."],
+          lastAssistant: { stopReason: "end_turn" } as EmbeddedRunAttemptResult["lastAssistant"],
+          toolMetas: [],
+        }),
+      );
+
+    const result = await runEmbeddedPiAgent({
+      ...baseParams,
+      messageChannel: INTERNAL_MESSAGE_CHANNEL,
+    });
+
+    expect(result.payloads?.[0]?.text).toContain("Continue guard 1/3");
+    expect(
+      result.payloads?.some((payload) => (payload.text ?? "").includes("OPENCLAW_STOP_REASON")),
+    ).toBe(true);
+  });
+
+  it("suppresses partial stream callbacks during continue-guard retries and preserves prior reply when completion is marker-only", async () => {
+    mockedBuildEmbeddedRunPayloads.mockImplementation((params) =>
+      (params.assistantTexts ?? []).map((text) => ({ text })),
+    );
+    const onPartialReply = vi.fn();
+
+    mockedRunEmbeddedAttempt
+      .mockImplementationOnce(async (params) => {
+        await params.onPartialReply?.({ text: "First answer." });
+        return makeAttemptResult({
+          assistantTexts: ["First answer."],
+          lastAssistant: { stopReason: "end_turn" } as EmbeddedRunAttemptResult["lastAssistant"],
+          toolMetas: [],
+        });
+      })
+      .mockImplementationOnce(async (params) => {
+        await params.onPartialReply?.({ text: "OPENCLAW_STOP_REASON: completed" });
+        return makeAttemptResult({
+          assistantTexts: ["OPENCLAW_STOP_REASON: completed"],
+          lastAssistant: { stopReason: "end_turn" } as EmbeddedRunAttemptResult["lastAssistant"],
+          toolMetas: [],
+        });
+      });
+
+    const result = await runEmbeddedPiAgent({
+      ...baseParams,
+      onPartialReply,
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(mockedRunEmbeddedAttempt.mock.calls[1]?.[0]?.onPartialReply).toBeUndefined();
+    expect(onPartialReply).toHaveBeenCalledTimes(1);
+    expect(result.payloads?.[0]?.text).toBe("First answer.");
+    expect(result.meta.stopReasonDetail).toBe("completed");
   });
 });
