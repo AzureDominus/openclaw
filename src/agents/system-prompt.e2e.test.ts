@@ -187,6 +187,9 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("If a tool result indicates output truncation");
     expect(prompt).toContain("Keep working until the request is fully resolved");
     expect(prompt).toContain("Do not stop after a status update");
+    expect(prompt).toContain("OPENCLAW_STOP_REASON: completed");
+    expect(prompt).toContain("OPENCLAW_STOP_REASON: needs_user_input");
+    expect(prompt).toContain("as the final line");
   });
 
   it("lists available tools when provided", () => {
