@@ -1,9 +1,10 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
 import { createAgentSession, SessionManager, SettingsManager } from "@mariozechner/pi-coding-agent";
+import fs from "node:fs/promises";
+import os from "node:os";
+import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
@@ -22,7 +23,7 @@ import { resolveUserPath } from "../../../utils.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../../agent-paths.js";
-import { resolveSessionAgentIds } from "../../agent-scope.js";
+import { resolveContinueGuardRetries, resolveSessionAgentIds } from "../../agent-scope.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../../bootstrap-files.js";
 import { createCacheTrace } from "../../cache-trace.js";
@@ -106,7 +107,6 @@ import {
   shouldFlagCompactionTimeout,
 } from "./compaction-timeout.js";
 import { detectAndLoadPromptImages } from "./images.js";
-import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 export function injectHistoryImagesIntoMessages(
   messages: AgentMessage[],
@@ -381,6 +381,7 @@ export async function runEmbeddedAttempt(
       sessionKey: params.sessionKey,
       config: params.config,
     });
+    const continueGuardMaxRetries = resolveContinueGuardRetries(params.config, sessionAgentId);
     const sandboxInfo = buildEmbeddedSandboxInfo(sandbox, params.bashElevated);
     const reasoningTagHint = isReasoningTagProvider(params.provider);
     // Resolve channel-specific message actions for system prompt
@@ -460,6 +461,7 @@ export async function runEmbeddedAttempt(
       userTimeFormat,
       contextFiles,
       memoryCitationsMode: params.config?.memory?.citations,
+      stopReasonTagEnabled: continueGuardMaxRetries > 0,
     });
     const systemPromptReport = buildSystemPromptReport({
       source: "run",
