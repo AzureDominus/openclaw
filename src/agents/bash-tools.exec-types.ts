@@ -44,6 +44,9 @@ export type ExecToolDetails =
       durationMs: number;
       aggregated: string;
       cwd?: string;
+      truncated?: boolean;
+      totalOutputChars?: number;
+      outputCapChars?: number;
     }
   | {
       status: "approval-pending";

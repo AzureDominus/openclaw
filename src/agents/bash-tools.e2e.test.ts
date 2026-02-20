@@ -328,6 +328,27 @@ describe("exec exit codes", () => {
     expect(text).toContain("nope");
     expect(text).toContain("Command exited with code 1");
   });
+
+  it("surfaces truncation metadata and appends a truncation notice", async () => {
+    const command = isWin
+      ? "node -e \"process.stdout.write('x'.repeat(45000))\""
+      : "node -e 'process.stdout.write(\"x\".repeat(45000))'";
+    const result = await execTool.execute("call-truncate", { command });
+    const details = result.details as {
+      status?: string;
+      truncated?: boolean;
+      totalOutputChars?: number;
+      outputCapChars?: number;
+    };
+
+    expect(details.status).toBe("completed");
+    expect(details.truncated).toBe(true);
+    expect(details.outputCapChars).toBe(40_000);
+    expect((details.totalOutputChars ?? 0) > (details.outputCapChars ?? 0)).toBe(true);
+
+    const text = result.content.find((c) => c.type === "text")?.text ?? "";
+    expect(text).toContain("[exec output truncated: showing last 40000 chars of");
+  });
 });
 
 describe("exec notifyOnExit", () => {

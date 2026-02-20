@@ -47,12 +47,13 @@ vi.mock("../pi-embedded-helpers.js", async () => {
   };
 });
 
+import type { EmbeddedRunAttemptResult } from "./run/types.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { compactEmbeddedPiSessionDirect } from "./compact.js";
 import { log } from "./logger.js";
 import { runEmbeddedPiAgent } from "./run.js";
 import { makeAttemptResult, mockOverflowRetrySuccess } from "./run.overflow-compaction.fixture.js";
 import { runEmbeddedAttempt } from "./run/attempt.js";
-import type { EmbeddedRunAttemptResult } from "./run/types.js";
 import {
   sessionLikelyHasOversizedToolResults,
   truncateOversizedToolResultsInSession,
@@ -365,5 +366,109 @@ describe("overflow compaction in run loop", () => {
 
     expect(result.meta.agentMeta?.usage?.input).toBe(4_000);
     expect(result.meta.agentMeta?.promptTokens).toBe(2_000);
+  });
+
+  it("retries with continue guard when end_turn has no tools and no valid stop reason", async () => {
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: ["Checking now."],
+          lastAssistant: { stopReason: "end_turn" } as EmbeddedRunAttemptResult["lastAssistant"],
+          toolMetas: [],
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: ["Still checking."],
+          lastAssistant: { stopReason: "end_turn" } as EmbeddedRunAttemptResult["lastAssistant"],
+          toolMetas: [],
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: ["OPENCLAW_STOP_REASON: completed\nDone."],
+          lastAssistant: { stopReason: "end_turn" } as EmbeddedRunAttemptResult["lastAssistant"],
+          toolMetas: [],
+        }),
+      );
+
+    const result = await runEmbeddedPiAgent(baseParams);
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
+    expect(mockedRunEmbeddedAttempt.mock.calls[1]?.[0]?.prompt ?? "").toContain(
+      "SYSTEM CONTINUE GUARD (1/3)",
+    );
+    expect(mockedRunEmbeddedAttempt.mock.calls[2]?.[0]?.prompt ?? "").toContain(
+      "SYSTEM CONTINUE GUARD (2/3)",
+    );
+    expect(result.meta.stopReason).toBe("end_turn");
+    expect(result.meta.stopReasonDetail).toBe("completed");
+  });
+
+  it("caps continue guard retries at three", async () => {
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: ["Checking step 1."],
+          lastAssistant: { stopReason: "end_turn" } as EmbeddedRunAttemptResult["lastAssistant"],
+          toolMetas: [],
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: ["Checking step 2."],
+          lastAssistant: { stopReason: "end_turn" } as EmbeddedRunAttemptResult["lastAssistant"],
+          toolMetas: [],
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: ["Checking step 3."],
+          lastAssistant: { stopReason: "end_turn" } as EmbeddedRunAttemptResult["lastAssistant"],
+          toolMetas: [],
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: ["Checking step 4."],
+          lastAssistant: { stopReason: "end_turn" } as EmbeddedRunAttemptResult["lastAssistant"],
+          toolMetas: [],
+        }),
+      );
+
+    await runEmbeddedPiAgent(baseParams);
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(4);
+    expect(mockedRunEmbeddedAttempt.mock.calls[3]?.[0]?.prompt ?? "").toContain(
+      "SYSTEM CONTINUE GUARD (3/3)",
+    );
+  });
+
+  it("surfaces continue guard retries as chat payload notices for internal UI channel", async () => {
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: ["Checking now."],
+          lastAssistant: { stopReason: "end_turn" } as EmbeddedRunAttemptResult["lastAssistant"],
+          toolMetas: [],
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: ["OPENCLAW_STOP_REASON: completed\nDone."],
+          lastAssistant: { stopReason: "end_turn" } as EmbeddedRunAttemptResult["lastAssistant"],
+          toolMetas: [],
+        }),
+      );
+
+    const result = await runEmbeddedPiAgent({
+      ...baseParams,
+      messageChannel: INTERNAL_MESSAGE_CHANNEL,
+    });
+
+    expect(result.payloads?.[0]?.text).toContain("Continue guard 1/3");
+    expect(
+      result.payloads?.some((payload) => (payload.text ?? "").includes("OPENCLAW_STOP_REASON")),
+    ).toBe(true);
   });
 });

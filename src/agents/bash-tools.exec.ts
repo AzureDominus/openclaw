@@ -1,6 +1,11 @@
+import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
+import type {
+  ExecElevatedDefaults,
+  ExecToolDefaults,
+  ExecToolDetails,
+} from "./bash-tools.exec-types.js";
 import { type ExecHost, maxAsk, minSecurity, resolveSafeBins } from "../infra/exec-approvals.js";
 import { getTrustedSafeBinDirs } from "../infra/exec-safe-bin-trust.js";
 import {
@@ -28,11 +33,6 @@ import {
   execSchema,
   validateHostEnv,
 } from "./bash-tools.exec-runtime.js";
-import type {
-  ExecElevatedDefaults,
-  ExecToolDefaults,
-  ExecToolDetails,
-} from "./bash-tools.exec-types.js";
 import {
   buildSandboxEnv,
   clampWithDefault,
@@ -145,6 +145,20 @@ async function validateScriptFileForShellBleed(params: {
       );
     }
   }
+}
+
+function formatTruncationNotice(params: {
+  truncated: boolean;
+  outputCapChars: number;
+  totalOutputChars: number;
+}) {
+  if (!params.truncated) {
+    return "";
+  }
+  return (
+    `\n\n[exec output truncated: showing last ${params.outputCapChars} chars` +
+    ` of ${params.totalOutputChars} captured]`
+  );
 }
 
 export function createExecTool(
@@ -508,15 +522,20 @@ export function createExecTool(
             if (yielded || run.session.backgrounded) {
               return;
             }
+            const truncationNotice = formatTruncationNotice({
+              truncated: outcome.truncated,
+              outputCapChars: outcome.outputCapChars,
+              totalOutputChars: outcome.totalOutputChars,
+            });
             if (outcome.status === "failed") {
-              reject(new Error(outcome.reason ?? "Command failed."));
+              reject(new Error(`${outcome.reason ?? "Command failed."}${truncationNotice}`));
               return;
             }
             resolve({
               content: [
                 {
                   type: "text",
-                  text: `${getWarningText()}${outcome.aggregated || "(no output)"}`,
+                  text: `${getWarningText()}${outcome.aggregated || "(no output)"}${truncationNotice}`,
                 },
               ],
               details: {
@@ -525,6 +544,9 @@ export function createExecTool(
                 durationMs: outcome.durationMs,
                 aggregated: outcome.aggregated,
                 cwd: run.session.cwd,
+                truncated: outcome.truncated,
+                totalOutputChars: outcome.totalOutputChars,
+                outputCapChars: outcome.outputCapChars,
               },
             });
           })

@@ -1,10 +1,11 @@
 import type { HumanDelayConfig } from "../../config/types.js";
-import { sleep } from "../../utils.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import { registerDispatcher } from "./dispatcher-registry.js";
-import { normalizeReplyPayload, type NormalizeReplySkipReason } from "./normalize-reply.js";
 import type { ResponsePrefixContext } from "./response-prefix-template.js";
 import type { TypingController } from "./typing.js";
+import { stripDeclaredStopReasonLine } from "../../agents/stop-reason.js";
+import { sleep } from "../../utils.js";
+import { registerDispatcher } from "./dispatcher-registry.js";
+import { normalizeReplyPayload, type NormalizeReplySkipReason } from "./normalize-reply.js";
 
 export type ReplyDispatchKind = "tool" | "block" | "final";
 
@@ -54,6 +55,8 @@ export type ReplyDispatcherOptions = {
   onSkip?: ReplyDispatchSkipHandler;
   /** Human-like delay between block replies for natural rhythm. */
   humanDelay?: HumanDelayConfig;
+  /** Strip OPENCLAW_STOP_REASON marker lines before delivery. */
+  stripStopReasonMarker?: boolean;
 };
 
 export type ReplyDispatcherWithTypingOptions = Omit<ReplyDispatcherOptions, "onIdle"> & {
@@ -80,7 +83,11 @@ export type ReplyDispatcher = {
 
 type NormalizeReplyPayloadInternalOptions = Pick<
   ReplyDispatcherOptions,
-  "responsePrefix" | "responsePrefixContext" | "responsePrefixContextProvider" | "onHeartbeatStrip"
+  | "responsePrefix"
+  | "responsePrefixContext"
+  | "responsePrefixContextProvider"
+  | "onHeartbeatStrip"
+  | "stripStopReasonMarker"
 > & {
   onSkip?: (reason: NormalizeReplySkipReason) => void;
 };
@@ -92,12 +99,19 @@ function normalizeReplyPayloadInternal(
   // Prefer dynamic context provider over static context
   const prefixContext = opts.responsePrefixContextProvider?.() ?? opts.responsePrefixContext;
 
-  return normalizeReplyPayload(payload, {
+  const normalized = normalizeReplyPayload(payload, {
     responsePrefix: opts.responsePrefix,
     responsePrefixContext: prefixContext,
     onHeartbeatStrip: opts.onHeartbeatStrip,
     onSkip: opts.onSkip,
   });
+  if (!normalized) {
+    return null;
+  }
+  if (opts.stripStopReasonMarker && typeof normalized.text === "string" && normalized.text.trim()) {
+    return { ...normalized, text: stripDeclaredStopReasonLine(normalized.text) };
+  }
+  return normalized;
 }
 
 export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDispatcher {
@@ -128,6 +142,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
       responsePrefixContext: options.responsePrefixContext,
       responsePrefixContextProvider: options.responsePrefixContextProvider,
       onHeartbeatStrip: options.onHeartbeatStrip,
+      stripStopReasonMarker: options.stripStopReasonMarker,
       onSkip: (reason) => options.onSkip?.(payload, { kind, reason }),
     });
     if (!normalized) {

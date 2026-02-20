@@ -1,4 +1,10 @@
 import type { Bot } from "grammy";
+import type { OpenClawConfig, ReplyToMode, TelegramAccountConfig } from "../config/types.js";
+import type { RuntimeEnv } from "../runtime.js";
+import type { TelegramMessageContext } from "./bot-message-context.js";
+import type { TelegramBotOptions } from "./bot.js";
+import type { TelegramStreamMode } from "./bot/types.js";
+import type { TelegramInlineButtons } from "./button-types.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import {
   findModelInCatalog,
@@ -15,15 +21,9 @@ import { logAckFailure, logTypingFailure } from "../channels/logging.js";
 import { createReplyPrefixOptions } from "../channels/reply-prefix.js";
 import { createTypingCallbacks } from "../channels/typing.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
-import type { OpenClawConfig, ReplyToMode, TelegramAccountConfig } from "../config/types.js";
 import { danger, logVerbose } from "../globals.js";
 import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
-import type { RuntimeEnv } from "../runtime.js";
-import type { TelegramMessageContext } from "./bot-message-context.js";
-import type { TelegramBotOptions } from "./bot.js";
 import { deliverReplies } from "./bot/delivery.js";
-import type { TelegramStreamMode } from "./bot/types.js";
-import type { TelegramInlineButtons } from "./button-types.js";
 import { resolveTelegramDraftStreamingChunking } from "./draft-chunking.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
 import { editMessageTelegram } from "./send.js";
@@ -33,6 +33,13 @@ const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 
 /** Minimum chars before sending first streaming message (improves push notification UX) */
 const DRAFT_MIN_INITIAL_CHARS = 30;
+
+function normalizeDraftTextForDedup(text?: string): string {
+  if (typeof text !== "string") {
+    return "";
+  }
+  return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+}
 
 async function resolveStickerVisionSupport(cfg: OpenClawConfig, agentId: string) {
   try {
@@ -119,6 +126,18 @@ export const dispatchTelegramMessage = async ({
   let lastPartialText = "";
   let draftText = "";
   let hasStreamedMessage = false;
+  const streamedPartialSegments = new Set<string>();
+  const resetDraftTracking = () => {
+    lastPartialText = "";
+    draftText = "";
+    draftChunker?.reset();
+  };
+  const rememberStreamedPartialSegment = (text?: string) => {
+    const normalized = normalizeDraftTextForDedup(text);
+    if (normalized) {
+      streamedPartialSegments.add(normalized);
+    }
+  };
   const updateDraftFromPartial = (text?: string) => {
     if (!draftStream || !text) {
       return;
@@ -186,6 +205,20 @@ export const dispatchTelegramMessage = async ({
       }
     }
     await draftStream.flush();
+  };
+  const splitPartialSegmentOnToolStart = async () => {
+    if (!draftStream || streamMode !== "partial") {
+      return;
+    }
+    const currentSegment = normalizeDraftTextForDedup(lastPartialText);
+    if (!currentSegment) {
+      resetDraftTracking();
+      return;
+    }
+    await flushDraft();
+    rememberStreamedPartialSegment(lastPartialText);
+    draftStream.forceNewMessage();
+    resetDraftTracking();
   };
 
   const disableBlockStreaming =
@@ -298,10 +331,23 @@ export const dispatchTelegramMessage = async ({
       cfg,
       dispatcherOptions: {
         ...prefixOptions,
+        stripStopReasonMarker: true,
         deliver: async (payload, info) => {
           if (info.kind === "final") {
-            await flushDraft();
             const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+            const normalizedFinalText = normalizeDraftTextForDedup(payload.text);
+            const isReplayedPartialSegment =
+              streamMode === "partial" &&
+              !payload.isError &&
+              !hasMedia &&
+              normalizedFinalText.length > 0 &&
+              streamedPartialSegments.has(normalizedFinalText);
+            if (isReplayedPartialSegment) {
+              // This segment was already streamed as its own message before a tool call.
+              deliveryState.delivered = true;
+              return;
+            }
+            await flushDraft();
             const previewMessageId = draftStream?.messageId();
             const finalText = payload.text;
             const currentPreviewText = streamMode === "block" ? draftText : lastPartialText;
@@ -338,6 +384,7 @@ export const dispatchTelegramMessage = async ({
                   linkPreview: telegramCfg.linkPreview,
                   buttons: previewButtons,
                 });
+                rememberStreamedPartialSegment(finalText);
                 finalizedViaPreviewMessage = true;
                 deliveryState.delivered = true;
                 return;
@@ -380,6 +427,7 @@ export const dispatchTelegramMessage = async ({
                   linkPreview: telegramCfg.linkPreview,
                   buttons: previewButtons,
                 });
+                rememberStreamedPartialSegment(finalText);
                 finalizedViaPreviewMessage = true;
                 deliveryState.delivered = true;
                 return;
@@ -434,9 +482,7 @@ export const dispatchTelegramMessage = async ({
                 logVerbose(`telegram: calling forceNewMessage()`);
                 draftStream.forceNewMessage();
               }
-              lastPartialText = "";
-              draftText = "";
-              draftChunker?.reset();
+              resetDraftTracking();
             }
           : undefined,
         onReasoningEnd: draftStream
@@ -445,11 +491,18 @@ export const dispatchTelegramMessage = async ({
               if (shouldSplitPreviewMessages && hasStreamedMessage) {
                 draftStream.forceNewMessage();
               }
-              lastPartialText = "";
-              draftText = "";
-              draftChunker?.reset();
+              resetDraftTracking();
             }
           : undefined,
+        onToolStart:
+          draftStream && streamMode === "partial"
+            ? async (toolEvent) => {
+                if (toolEvent.phase !== "start") {
+                  return;
+                }
+                await splitPartialSegmentOnToolStart();
+              }
+            : undefined,
         onModelSelected,
       },
     }));
