@@ -13,6 +13,7 @@ import {
 } from "../agents/model-catalog.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { EmbeddedBlockChunker } from "../agents/pi-embedded-block-chunker.js";
+import { stripDeclaredStopReasonLine } from "../agents/stop-reason.js";
 import { resolveChunkMode } from "../auto-reply/chunk.js";
 import { clearHistoryEntriesIfEnabled } from "../auto-reply/reply/history.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
@@ -39,6 +40,32 @@ function normalizeDraftTextForDedup(text?: string): string {
     return "";
   }
   return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+}
+
+function isLikelyRegressiveFinalEdit(params: {
+  currentPreviewText: string;
+  finalText: string;
+}): boolean {
+  const { currentPreviewText, finalText } = params;
+  if (!currentPreviewText || !finalText) {
+    return false;
+  }
+  if (finalText.length >= currentPreviewText.length) {
+    return false;
+  }
+  if (!currentPreviewText.startsWith(finalText)) {
+    return false;
+  }
+
+  // Allow shortening when the only removed suffix is the internal stop-reason marker.
+  const normalizedCurrentWithoutStopReason = normalizeDraftTextForDedup(
+    stripDeclaredStopReasonLine(currentPreviewText),
+  );
+  const normalizedFinal = normalizeDraftTextForDedup(finalText);
+  if (normalizedCurrentWithoutStopReason === normalizedFinal) {
+    return false;
+  }
+  return true;
 }
 
 async function resolveStickerVisionSupport(cfg: OpenClawConfig, agentId: string) {
@@ -369,11 +396,17 @@ export const dispatchTelegramMessage = async ({
               draftStoppedForPreviewEdit = true;
               if (
                 currentPreviewText &&
-                currentPreviewText.startsWith(finalText) &&
-                finalText.length < currentPreviewText.length
+                isLikelyRegressiveFinalEdit({
+                  currentPreviewText,
+                  finalText,
+                })
               ) {
                 // Ignore regressive final edits (e.g., "Okay." -> "Ok"), which
                 // can appear transiently in some provider streams.
+                // Keep the already streamed preview message as the final user-visible
+                // reply instead of deleting it during cleanup.
+                finalizedViaPreviewMessage = true;
+                deliveryState.delivered = true;
                 return;
               }
               try {

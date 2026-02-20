@@ -208,8 +208,10 @@ function buildContinueGuardPrompt(attempt: number): string {
   return [
     `SYSTEM CONTINUE GUARD (${attempt}/${MAX_END_TURN_CONTINUE_GUARD_RETRIES}):`,
     "Your previous assistant turn ended without calling a tool and without a valid OPENCLAW_STOP_REASON tag.",
-    "If you are done, end your response with exactly: OPENCLAW_STOP_REASON: completed",
-    "If you need user input to continue, end your response with exactly: OPENCLAW_STOP_REASON: needs_user_input",
+    "Your previous user-facing message was already delivered to the user.",
+    "Do not repeat or rephrase that prior message.",
+    "If you are done, respond with ONLY: OPENCLAW_STOP_REASON: completed",
+    "If you need user input to continue, respond with ONLY: OPENCLAW_STOP_REASON: needs_user_input",
     "If you are not done and do not need user input, do not end turn; call the next tool now.",
     "Empty or invalid stop reasons are not allowed.",
   ].join("\n");
