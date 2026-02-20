@@ -204,12 +204,31 @@ function shouldGuardOnEndTurn(stopReason: string | undefined): boolean {
   return stopReason === "stop" || stopReason === "end_turn" || stopReason === "endturn";
 }
 
+const TEXTUAL_TOOL_CALL_RE = /^\s*assistant\s+to=functions\.[a-zA-Z0-9_]+\b/im;
+
+function hasLikelyTextualToolCall(params: {
+  assistantTexts: string[];
+  hadStructuredToolCall: boolean;
+}): boolean {
+  if (params.hadStructuredToolCall) {
+    return false;
+  }
+  for (const text of params.assistantTexts) {
+    if (TEXTUAL_TOOL_CALL_RE.test(text)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function buildContinueGuardPrompt(attempt: number): string {
   return [
     `SYSTEM CONTINUE GUARD (${attempt}/${MAX_END_TURN_CONTINUE_GUARD_RETRIES}):`,
     "Your previous assistant turn ended without calling a tool and without a valid OPENCLAW_STOP_REASON tag.",
     "Your previous user-facing message was already delivered to the user.",
     "Do not repeat or rephrase that prior message.",
+    "Do not write tool calls as plain text (for example: assistant to=functions.exec ...).",
+    "If another tool call is needed, call the tool directly using a structured tool call.",
     "If you are done, respond with ONLY: OPENCLAW_STOP_REASON: completed",
     "If you need user input to continue, respond with ONLY: OPENCLAW_STOP_REASON: needs_user_input",
     "If you are not done and do not need user input, do not end turn; call the next tool now.",
@@ -586,6 +605,25 @@ export async function runEmbeddedPiAgent(
           continueGuardPrompt = undefined;
           const prompt =
             provider === "anthropic" ? scrubAnthropicRefusalMagic(promptText) : promptText;
+          const onPartialReplyForAttempt =
+            isContinueGuardAttempt && params.onPartialReply
+              ? async (payload: { text?: string; mediaUrls?: string[] }) => {
+                  const strippedText =
+                    typeof payload.text === "string"
+                      ? stripDeclaredStopReasonLine(payload.text)
+                      : payload.text;
+                  const hasText =
+                    typeof strippedText === "string" && strippedText.trim().length > 0;
+                  const hasMedia = (payload.mediaUrls?.length ?? 0) > 0;
+                  if (!hasText && !hasMedia) {
+                    return;
+                  }
+                  await params.onPartialReply?.({
+                    ...payload,
+                    text: hasText ? strippedText : undefined,
+                  });
+                }
+              : params.onPartialReply;
 
           const attempt = await runEmbeddedAttempt({
             sessionId: params.sessionId,
@@ -629,7 +667,7 @@ export async function runEmbeddedPiAgent(
             abortSignal: params.abortSignal,
             shouldEmitToolResult: params.shouldEmitToolResult,
             shouldEmitToolOutput: params.shouldEmitToolOutput,
-            onPartialReply: isContinueGuardAttempt ? undefined : params.onPartialReply,
+            onPartialReply: onPartialReplyForAttempt,
             onAssistantMessageStart: isContinueGuardAttempt
               ? undefined
               : params.onAssistantMessageStart,
@@ -1082,15 +1120,25 @@ export async function runEmbeddedPiAgent(
           });
           const hadToolCallsThisAttempt =
             (attempt.toolMetas?.length ?? 0) > 0 || Boolean(attempt.clientToolCall);
+          const hasTextualToolCallOutput = hasLikelyTextualToolCall({
+            assistantTexts: attempt.assistantTexts ?? [],
+            hadStructuredToolCall: hadToolCallsThisAttempt,
+          });
           const shouldRetryForMissingStopReason =
             !aborted &&
             !timedOut &&
             Boolean(lastAssistant) &&
-            !hadToolCallsThisAttempt &&
             shouldGuardOnEndTurn(modelStopReason) &&
             !declaredStopReason &&
             continueGuardRetries < MAX_END_TURN_CONTINUE_GUARD_RETRIES;
-          if (shouldRetryForMissingStopReason) {
+          const shouldRetryForTextualToolCallOutput =
+            !aborted &&
+            !timedOut &&
+            Boolean(lastAssistant) &&
+            shouldGuardOnEndTurn(modelStopReason) &&
+            hasTextualToolCallOutput &&
+            continueGuardRetries < MAX_END_TURN_CONTINUE_GUARD_RETRIES;
+          if (shouldRetryForMissingStopReason || shouldRetryForTextualToolCallOutput) {
             const candidatePayloads = buildEmbeddedRunPayloads({
               assistantTexts: attempt.assistantTexts ?? [],
               toolMetas: attempt.toolMetas ?? [],
@@ -1106,17 +1154,25 @@ export async function runEmbeddedPiAgent(
               suppressToolErrorWarnings: params.suppressToolErrorWarnings,
               inlineToolResultsAllowed: false,
             });
-            if (hasAnyDeliverablePayloadAfterStopReasonStrip(candidatePayloads)) {
+            if (
+              hasAnyDeliverablePayloadAfterStopReasonStrip(candidatePayloads) &&
+              !hasTextualToolCallOutput
+            ) {
               continueGuardFallbackPayloads = candidatePayloads;
             }
+            const continueGuardRetryReason = shouldRetryForTextualToolCallOutput
+              ? "emitted an invalid plain-text tool call"
+              : "ended without tool call and missing/invalid OPENCLAW_STOP_REASON";
             continueGuardRetries += 1;
             continueGuardPrompt = buildContinueGuardPrompt(continueGuardRetries);
             log.warn(
-              `continue guard retry ${continueGuardRetries}/${MAX_END_TURN_CONTINUE_GUARD_RETRIES} for run ${params.runId}: ended without tool call and missing/invalid OPENCLAW_STOP_REASON`,
+              `continue guard retry ${continueGuardRetries}/${MAX_END_TURN_CONTINUE_GUARD_RETRIES} for run ${params.runId}: ${continueGuardRetryReason}`,
             );
             if (shouldSurfaceContinueGuardNotice) {
               continueGuardNotices.push(
-                `Continue guard ${continueGuardRetries}/${MAX_END_TURN_CONTINUE_GUARD_RETRIES}: model ended turn without a tool call and without a valid OPENCLAW_STOP_REASON tag. Retrying.`,
+                shouldRetryForTextualToolCallOutput
+                  ? `Continue guard ${continueGuardRetries}/${MAX_END_TURN_CONTINUE_GUARD_RETRIES}: model emitted a plain-text pseudo tool call instead of a structured tool call. Retrying.`
+                  : `Continue guard ${continueGuardRetries}/${MAX_END_TURN_CONTINUE_GUARD_RETRIES}: model ended turn without a tool call and without a valid OPENCLAW_STOP_REASON tag. Retrying.`,
               );
             }
             continue;

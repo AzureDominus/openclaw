@@ -42,30 +42,12 @@ function normalizeDraftTextForDedup(text?: string): string {
   return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
 }
 
-function isLikelyRegressiveFinalEdit(params: {
-  currentPreviewText: string;
-  finalText: string;
-}): boolean {
-  const { currentPreviewText, finalText } = params;
-  if (!currentPreviewText || !finalText) {
-    return false;
+function normalizePartialDraftText(text?: string): string {
+  if (typeof text !== "string") {
+    return "";
   }
-  if (finalText.length >= currentPreviewText.length) {
-    return false;
-  }
-  if (!currentPreviewText.startsWith(finalText)) {
-    return false;
-  }
-
-  // Allow shortening when the only removed suffix is the internal stop-reason marker.
-  const normalizedCurrentWithoutStopReason = normalizeDraftTextForDedup(
-    stripDeclaredStopReasonLine(currentPreviewText),
-  );
-  const normalizedFinal = normalizeDraftTextForDedup(finalText);
-  if (normalizedCurrentWithoutStopReason === normalizedFinal) {
-    return false;
-  }
-  return true;
+  // Never expose trailing internal stop markers in streamed Telegram previews.
+  return stripDeclaredStopReasonLine(text);
 }
 
 async function resolveStickerVisionSupport(cfg: OpenClawConfig, agentId: string) {
@@ -166,10 +148,11 @@ export const dispatchTelegramMessage = async ({
     }
   };
   const updateDraftFromPartial = (text?: string) => {
-    if (!draftStream || !text) {
+    const normalizedText = normalizePartialDraftText(text);
+    if (!draftStream || !normalizedText) {
       return;
     }
-    if (text === lastPartialText) {
+    if (normalizedText === lastPartialText) {
       return;
     }
     // Mark that we've received streaming content (for forceNewMessage decision).
@@ -180,29 +163,29 @@ export const dispatchTelegramMessage = async ({
       // visible punctuation flicker.
       if (
         lastPartialText &&
-        lastPartialText.startsWith(text) &&
-        text.length < lastPartialText.length
+        lastPartialText.startsWith(normalizedText) &&
+        normalizedText.length < lastPartialText.length
       ) {
         return;
       }
-      lastPartialText = text;
-      draftStream.update(text);
+      lastPartialText = normalizedText;
+      draftStream.update(normalizedText);
       return;
     }
-    let delta = text;
-    if (text.startsWith(lastPartialText)) {
-      delta = text.slice(lastPartialText.length);
+    let delta = normalizedText;
+    if (normalizedText.startsWith(lastPartialText)) {
+      delta = normalizedText.slice(lastPartialText.length);
     } else {
       // Streaming buffer reset (or non-monotonic stream). Start fresh.
       draftChunker?.reset();
       draftText = "";
     }
-    lastPartialText = text;
+    lastPartialText = normalizedText;
     if (!delta) {
       return;
     }
     if (!draftChunker) {
-      draftText = text;
+      draftText = normalizedText;
       draftStream.update(draftText);
       return;
     }
@@ -377,7 +360,6 @@ export const dispatchTelegramMessage = async ({
             await flushDraft();
             const previewMessageId = draftStream?.messageId();
             const finalText = payload.text;
-            const currentPreviewText = streamMode === "block" ? draftText : lastPartialText;
             const previewButtons = (
               payload.channelData?.telegram as { buttons?: TelegramInlineButtons } | undefined
             )?.buttons;
@@ -394,21 +376,6 @@ export const dispatchTelegramMessage = async ({
             if (canFinalizeViaPreviewEdit) {
               await draftStream?.stop();
               draftStoppedForPreviewEdit = true;
-              if (
-                currentPreviewText &&
-                isLikelyRegressiveFinalEdit({
-                  currentPreviewText,
-                  finalText,
-                })
-              ) {
-                // Ignore regressive final edits (e.g., "Okay." -> "Ok"), which
-                // can appear transiently in some provider streams.
-                // Keep the already streamed preview message as the final user-visible
-                // reply instead of deleting it during cleanup.
-                finalizedViaPreviewMessage = true;
-                deliveryState.delivered = true;
-                return;
-              }
               try {
                 await editMessageTelegram(chatId, previewMessageId, finalText, {
                   api: bot.api,

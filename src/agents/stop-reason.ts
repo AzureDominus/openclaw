@@ -1,6 +1,9 @@
 export type DeclaredStopReason = "completed" | "needs_user_input";
 
-const STOP_REASON_LINE_RE = /^\s*OPENCLAW_STOP_REASON\s*:\s*([^\r\n]+)\s*$/gim;
+const STOP_REASON_TRAILING_PARSE_RE =
+  /(?:^|\r?\n)[ \t]*OPENCLAW_STOP_REASON[ \t]*:[ \t]*([^\r\n]+)[ \t]*(?:\r?\n[ \t]*)*$/i;
+const STOP_REASON_TRAILING_STRIP_RE =
+  /(?:\r?\n)?[ \t]*OPENCLAW_STOP_REASON[ \t]*:[ \t]*[^\r\n]*[ \t]*(?:\r?\n[ \t]*)*$/i;
 
 function normalizeDeclaredStopReason(raw: string): DeclaredStopReason | undefined {
   const normalized = raw
@@ -30,8 +33,7 @@ export function extractDeclaredStopReasonFromText(
   if (!text || !text.trim()) {
     return undefined;
   }
-  STOP_REASON_LINE_RE.lastIndex = 0;
-  const match = STOP_REASON_LINE_RE.exec(text);
+  const match = STOP_REASON_TRAILING_PARSE_RE.exec(text);
   if (!match) {
     return undefined;
   }
@@ -56,7 +58,7 @@ export function stripDeclaredStopReasonLine(text: string): string {
   if (!text.trim()) {
     return text;
   }
-  const stripped = text.replace(STOP_REASON_LINE_RE, "");
+  const stripped = text.replace(STOP_REASON_TRAILING_STRIP_RE, "");
   return stripped.replace(/\n{3,}/g, "\n\n").trim();
 }
 
