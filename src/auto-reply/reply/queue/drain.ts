@@ -92,11 +92,12 @@ export function scheduleFollowupDrain(
           .join("\n\n");
         const prompt = [summaryPrompt, joinedPrompts].filter(Boolean).join("\n\n").trim();
 
-        queue.items = keyedItems
+        const remainingItems = keyedItems
           .filter((entry) => entry.key !== firstKey)
           .map((entry) => entry.item);
 
         if (!prompt) {
+          queue.items = remainingItems;
           if (summaryPrompt) {
             clearQueueSummaryState(queue);
           }
@@ -121,6 +122,7 @@ export function scheduleFollowupDrain(
           originatingAccountId,
           originatingThreadId,
         });
+        queue.items = remainingItems;
         if (summaryPrompt) {
           clearQueueSummaryState(queue);
         }

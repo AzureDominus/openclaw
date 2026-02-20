@@ -660,7 +660,7 @@ describe("followup queue deduplication", () => {
     );
     expect(first).toBe(true);
 
-    // Second enqueue with same message id should be deduplicated
+    // Second enqueue with same message id should upsert the queued item
     const second = enqueueFollowupRun(
       key,
       createRun({
@@ -671,7 +671,7 @@ describe("followup queue deduplication", () => {
       }),
       settings,
     );
-    expect(second).toBe(false);
+    expect(second).toBe(true);
 
     // Third enqueue with different message id should succeed
     const third = enqueueFollowupRun(
@@ -688,8 +688,10 @@ describe("followup queue deduplication", () => {
 
     scheduleFollowupDrain(key, runFollowup);
     await done.promise;
-    // Should collect both unique messages
-    expect(calls[0]?.prompt).toContain("[Queued messages while agent was busy]");
+    // Should collect both unique messages in one batched prompt
+    expect(calls[0]?.prompt).toBe(
+      "[Discord Guild #test channel id:123] Hello (dupe)\n\n[Discord Guild #test channel id:123] World",
+    );
   });
 
   it("deduplicates exact prompt when routing matches and no message id", async () => {
@@ -801,7 +803,7 @@ describe("followup queue deduplication", () => {
       settings,
       "prompt",
     );
-    expect(second).toBe(false);
+    expect(second).toBe(true);
   });
 });
 
@@ -888,7 +890,7 @@ describe("followup queue collect routing", () => {
 
     scheduleFollowupDrain(key, runFollowup);
     await done.promise;
-    expect(calls[0]?.prompt).toContain("[Queued messages while agent was busy]");
+    expect(calls[0]?.prompt).toBe("one\n\ntwo");
     expect(calls[0]?.originatingChannel).toBe("slack");
     expect(calls[0]?.originatingTo).toBe("channel:A");
   });
@@ -934,7 +936,7 @@ describe("followup queue collect routing", () => {
 
     scheduleFollowupDrain(key, runFollowup);
     await done.promise;
-    expect(calls[0]?.prompt).toContain("[Queued messages while agent was busy]");
+    expect(calls[0]?.prompt).toBe("one\n\ntwo");
     expect(calls[0]?.originatingThreadId).toBe("1706000000.000001");
   });
 
@@ -1013,8 +1015,7 @@ describe("followup queue collect routing", () => {
 
     scheduleFollowupDrain(key, runFollowup);
     await done.promise;
-    expect(calls[0]?.prompt).toContain("Queued #1\none");
-    expect(calls[0]?.prompt).toContain("Queued #2\ntwo");
+    expect(calls[0]?.prompt).toBe("one\n\ntwo");
   });
 
   it("retries overflow summary delivery without losing dropped previews", async () => {
