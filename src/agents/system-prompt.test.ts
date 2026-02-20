@@ -223,6 +223,27 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Do not poll `subagents list` / `sessions_list` in a loop");
   });
 
+  it("requires concise progress updates for multi-step tool work", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+    });
+
+    expect(prompt).toContain("## Tool Call Style");
+    expect(prompt).toContain("For multi-step or long-running work");
+    expect(prompt).toContain("send concise progress updates between tool bursts");
+    expect(prompt).toContain("If the user explicitly asks for updates between tool calls");
+    expect(prompt).toContain("before each tool call or small tool batch");
+    expect(prompt).toContain("send a brief preamble before each tool batch");
+    expect(prompt).toContain("Before long-latency operations");
+    expect(prompt).toContain("Prefer scoped extraction over giant dumps");
+    expect(prompt).toContain("For browser snapshots, prefer `mode=efficient`");
+    expect(prompt).toContain("If a tool result indicates output truncation");
+    expect(prompt).toContain("Keep working until the request is fully resolved");
+    expect(prompt).toContain("Do not stop after a status update");
+    expect(prompt).toContain("OPENCLAW_STOP_REASON: completed");
+    expect(prompt).toContain("OPENCLAW_STOP_REASON: needs_user_input");
+    expect(prompt).toContain("as the final line");
+  });
   it("lists available tools when provided", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
