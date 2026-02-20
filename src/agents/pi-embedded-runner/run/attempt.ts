@@ -32,7 +32,7 @@ import { resolveUserPath } from "../../../utils.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../../agent-paths.js";
-import { resolveSessionAgentIds } from "../../agent-scope.js";
+import { resolveContinueGuardRetries, resolveSessionAgentIds } from "../../agent-scope.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
 import {
   analyzeBootstrapBudget,
@@ -1462,6 +1462,7 @@ export async function runEmbeddedAttempt(
       config: params.config,
       agentId: params.agentId,
     });
+    const continueGuardMaxRetries = resolveContinueGuardRetries(params.config, sessionAgentId);
     const effectiveFsWorkspaceOnly = resolveAttemptFsWorkspaceOnly({
       config: params.config,
       sessionAgentId,
@@ -1669,6 +1670,7 @@ export async function runEmbeddedAttempt(
       contextFiles,
       bootstrapTruncationWarningLines: bootstrapPromptWarning.lines,
       memoryCitationsMode: params.config?.memory?.citations,
+      stopReasonTagEnabled: continueGuardMaxRetries > 0,
     });
     const systemPromptReport = buildSystemPromptReport({
       source: "run",

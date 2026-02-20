@@ -16,7 +16,7 @@ import {
   isMarkdownCapableMessageChannel,
 } from "../../utils/message-channel.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
-import { hasConfiguredModelFallbacks } from "../agent-scope.js";
+import { hasConfiguredModelFallbacks, resolveContinueGuardRetries } from "../agent-scope.js";
 import {
   isProfileInCooldown,
   type AuthProfileFailureReason,
@@ -102,8 +102,6 @@ const OVERLOAD_FAILOVER_BACKOFF_POLICY: BackoffPolicy = {
 // Avoid Anthropic's refusal test token poisoning session transcripts.
 const ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
 const ANTHROPIC_MAGIC_STRING_REPLACEMENT = "ANTHROPIC MAGIC STRING TRIGGER REFUSAL (redacted)";
-const MAX_END_TURN_CONTINUE_GUARD_RETRIES = 3;
-
 type ContinueGuardStopReason = "completed" | "needs_user_input";
 type EmbeddedRunPayload = ReturnType<typeof buildEmbeddedRunPayloads>[number];
 
@@ -304,9 +302,9 @@ function hasLikelyTextualToolCall(params: {
   return false;
 }
 
-function buildContinueGuardPrompt(attempt: number): string {
+function buildContinueGuardPrompt(attempt: number, maxRetries: number): string {
   return [
-    `SYSTEM CONTINUE GUARD (${attempt}/${MAX_END_TURN_CONTINUE_GUARD_RETRIES}):`,
+    `SYSTEM CONTINUE GUARD (${attempt}/${maxRetries}):`,
     "Your previous assistant turn ended without calling a tool and without a valid OPENCLAW_STOP_REASON tag.",
     "Your previous user-facing message was already delivered to the user.",
     "Do not repeat or rephrase that prior message.",
@@ -852,6 +850,10 @@ export async function runEmbeddedPiAgent(
       };
 
       const MAX_OVERFLOW_COMPACTION_ATTEMPTS = 3;
+      const continueGuardMaxRetries = resolveContinueGuardRetries(
+        params.config,
+        workspaceResolution.agentId,
+      );
       let overflowCompactionAttempts = 0;
       let toolResultTruncationAttempted = false;
       let bootstrapPromptWarningSignaturesSeen =
@@ -1646,14 +1648,14 @@ export async function runEmbeddedPiAgent(
             Boolean(lastAssistant) &&
             shouldGuardOnEndTurn(modelStopReason) &&
             !declaredStopReason &&
-            continueGuardRetries < MAX_END_TURN_CONTINUE_GUARD_RETRIES;
+            continueGuardRetries < continueGuardMaxRetries;
           const shouldRetryForTextualToolCallOutput =
             !aborted &&
             !timedOut &&
             Boolean(lastAssistant) &&
             shouldGuardOnEndTurn(modelStopReason) &&
             hasTextualToolCallOutput &&
-            continueGuardRetries < MAX_END_TURN_CONTINUE_GUARD_RETRIES;
+            continueGuardRetries < continueGuardMaxRetries;
           if (shouldRetryForMissingStopReason || shouldRetryForTextualToolCallOutput) {
             const candidatePayloads = buildEmbeddedRunPayloads({
               assistantTexts: attempt.assistantTexts ?? [],
@@ -1681,15 +1683,18 @@ export async function runEmbeddedPiAgent(
               ? "emitted an invalid plain-text tool call"
               : "ended without tool call and missing/invalid OPENCLAW_STOP_REASON";
             continueGuardRetries += 1;
-            continueGuardPrompt = buildContinueGuardPrompt(continueGuardRetries);
+            continueGuardPrompt = buildContinueGuardPrompt(
+              continueGuardRetries,
+              continueGuardMaxRetries,
+            );
             log.warn(
-              `continue guard retry ${continueGuardRetries}/${MAX_END_TURN_CONTINUE_GUARD_RETRIES} for run ${params.runId}: ${continueGuardRetryReason}`,
+              `continue guard retry ${continueGuardRetries}/${continueGuardMaxRetries} for run ${params.runId}: ${continueGuardRetryReason}`,
             );
             if (shouldSurfaceContinueGuardNotice) {
               continueGuardNotices.push(
                 shouldRetryForTextualToolCallOutput
-                  ? `Continue guard ${continueGuardRetries}/${MAX_END_TURN_CONTINUE_GUARD_RETRIES}: model emitted a plain-text pseudo tool call instead of a structured tool call. Retrying.`
-                  : `Continue guard ${continueGuardRetries}/${MAX_END_TURN_CONTINUE_GUARD_RETRIES}: model ended turn without a tool call and without a valid OPENCLAW_STOP_REASON tag. Retrying.`,
+                  ? `Continue guard ${continueGuardRetries}/${continueGuardMaxRetries}: model emitted a plain-text pseudo tool call instead of a structured tool call. Retrying.`
+                  : `Continue guard ${continueGuardRetries}/${continueGuardMaxRetries}: model ended turn without a tool call and without a valid OPENCLAW_STOP_REASON tag. Retrying.`,
               );
             }
             continue;
