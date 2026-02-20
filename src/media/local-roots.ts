@@ -51,11 +51,32 @@ export function getDefaultMediaLocalRoots(): readonly string[] {
   return buildMediaLocalRoots(resolveStateDir(), resolveConfigDir());
 }
 
+function appendConfiguredMediaLocalRoots(roots: string[], cfg: OpenClawConfig): string[] {
+  const configuredRoots = cfg.messages?.mediaLocalRoots;
+  if (!configuredRoots?.length) {
+    return roots;
+  }
+  for (const entry of configuredRoots) {
+    const normalized = normalizeOptionalString(entry);
+    if (!normalized) {
+      continue;
+    }
+    const root = resolveUserPath(normalized);
+    if (!roots.includes(root)) {
+      roots.push(root);
+    }
+  }
+  return roots;
+}
+
 export function getAgentScopedMediaLocalRoots(
   cfg: OpenClawConfig,
   agentId?: string,
 ): readonly string[] {
-  const roots = buildMediaLocalRoots(resolveStateDir(), resolveConfigDir());
+  const roots = appendConfiguredMediaLocalRoots(
+    buildMediaLocalRoots(resolveStateDir(), resolveConfigDir()),
+    cfg,
+  );
   const normalizedAgentId = normalizeOptionalString(agentId);
   if (!normalizedAgentId) {
     return roots;
