@@ -389,6 +389,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.humanDelay.mode": "Human Delay Mode",
   "agents.defaults.humanDelay.minMs": "Human Delay Min (ms)",
   "agents.defaults.humanDelay.maxMs": "Human Delay Max (ms)",
+  "agents.defaults.continueGuardRetries": "Continue Guard Retries",
   "agents.defaults.cliBackends": "CLI Backends",
   "agents.defaults.compaction": "Compaction",
   "agents.defaults.compaction.mode": "Compaction Mode",
@@ -720,6 +721,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.list[].sandbox.browser.cdpSourceRange": "Agent Sandbox Browser CDP Source Port Range",
   "agents.list[].sandbox.docker.dangerouslyAllowContainerNamespaceJoin":
     "Agent Sandbox Docker Allow Container Namespace Join",
+  "agents.list[].continueGuardRetries": "Continue Guard Retries",
   "discovery.mdns.mode": "mDNS Discovery Mode",
   plugins: "Plugins",
   "plugins.enabled": "Enable Plugins",

@@ -183,6 +183,12 @@ export type AgentDefaultsConfig = {
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
   /** Human-like delay between block replies. */
   humanDelay?: HumanDelayConfig;
+  /**
+   * Continue-guard retries for end-turns without valid stop reason.
+   * - Default: 3
+   * - 0 disables continue guard retries (and stop-reason tag guidance in prompts).
+   */
+  continueGuardRetries?: number;
   timeoutSeconds?: number;
   /** Max inbound media size in MB for agent-visible attachments (text note or future image attach). */
   mediaMaxMb?: number;

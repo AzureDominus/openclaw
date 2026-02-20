@@ -39,6 +39,8 @@ type ResolvedAgentConfig = {
   tools?: AgentEntry["tools"];
 };
 
+export const DEFAULT_CONTINUE_GUARD_RETRIES = 3;
+
 let defaultAgentWarned = false;
 
 export function listAgentEntries(cfg: OpenClawConfig): AgentEntry[] {
@@ -106,6 +108,17 @@ export function resolveSessionAgentId(params: {
   config?: OpenClawConfig;
 }): string {
   return resolveSessionAgentIds(params).sessionAgentId;
+}
+
+function normalizeContinueGuardRetries(raw: unknown): number | undefined {
+  if (typeof raw !== "number" || !Number.isFinite(raw)) {
+    return undefined;
+  }
+  const normalized = Math.trunc(raw);
+  if (normalized < 0) {
+    return undefined;
+  }
+  return normalized;
 }
 
 function resolveAgentEntry(cfg: OpenClawConfig, agentId: string): AgentEntry | undefined {
@@ -242,4 +255,16 @@ export function resolveAgentDir(cfg: OpenClawConfig, agentId: string) {
   }
   const root = resolveStateDir(process.env);
   return path.join(root, "agents", id, "agent");
+}
+
+export function resolveContinueGuardRetries(
+  cfg: OpenClawConfig | undefined,
+  agentId?: string,
+): number {
+  const defaultRetries = normalizeContinueGuardRetries(cfg?.agents?.defaults?.continueGuardRetries);
+  const agentRetries =
+    cfg && typeof agentId === "string" && agentId.trim()
+      ? normalizeContinueGuardRetries(resolveAgentEntry(cfg, agentId)?.continueGuardRetries)
+      : undefined;
+  return agentRetries ?? defaultRetries ?? DEFAULT_CONTINUE_GUARD_RETRIES;
 }

@@ -913,6 +913,10 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.humanDelay.maxMs": "Maximum delay in ms for custom humanDelay (default: 2500).",
   commands:
     "Controls chat command surfaces, owner gating, and elevated command access behavior across providers. Keep defaults unless you need stricter operator controls or broader command availability.",
+  "agents.defaults.continueGuardRetries":
+    "Max continue-guard retries when a turn ends without a tool call and without a valid OPENCLAW_STOP_REASON tag (default: 3; 0 disables).",
+  "agents.list.*.continueGuardRetries":
+    "Per-agent override for continue-guard retries (default/inherited from agents.defaults.continueGuardRetries).",
   "commands.native":
     "Registers native slash/menu commands with channels that support command registration (Discord, Slack, Telegram). Keep enabled for discoverability unless you intentionally run text-only command workflows.",
   "commands.nativeSkills":

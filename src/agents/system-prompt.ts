@@ -230,6 +230,8 @@ export function buildAgentSystemPrompt(params: {
     channel: string;
   };
   memoryCitationsMode?: MemoryCitationsMode;
+  /** Whether OPENCLAW_STOP_REASON guidance is included (default: true). */
+  stopReasonTagEnabled?: boolean;
 }) {
   const coreToolSummaries: Record<string, string> = {
     read: "Read file contents",
@@ -400,6 +402,7 @@ export function buildAgentSystemPrompt(params: {
     isMinimal,
     readToolName,
   });
+  const stopReasonTagEnabled = params.stopReasonTagEnabled !== false;
   const workspaceNotes = (params.workspaceNotes ?? []).map((note) => note.trim()).filter(Boolean);
 
   // For "none" mode, return just the basic identity line
@@ -452,11 +455,15 @@ export function buildAgentSystemPrompt(params: {
     "Keep updates brief and value-dense (1-2 short sentences, plain language, no filler).",
     "Keep working until the request is fully resolved before ending your turn.",
     "Do not stop after a status update; continue with the next tool call unless you are blocked and need user input.",
-    "When you end a turn without calling a tool, include exactly one stop-reason marker as the final line:",
-    "- OPENCLAW_STOP_REASON: completed",
-    "- OPENCLAW_STOP_REASON: needs_user_input",
-    "Only use the marker when actually ending turn; if you still need to act, call the next tool instead.",
-    "The stop-reason marker is internal metadata and may be stripped from user-facing channel delivery.",
+    ...(stopReasonTagEnabled
+      ? [
+          "When you end a turn without calling a tool, include exactly one stop-reason marker as the final line:",
+          "- OPENCLAW_STOP_REASON: completed",
+          "- OPENCLAW_STOP_REASON: needs_user_input",
+          "Only use the marker when actually ending turn; if you still need to act, call the next tool instead.",
+          "The stop-reason marker is internal metadata and may be stripped from user-facing channel delivery.",
+        ]
+      : []),
     "",
     ...safetySection,
     "## OpenClaw CLI Quick Reference",

@@ -2,7 +2,9 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
+  DEFAULT_CONTINUE_GUARD_RETRIES,
   resolveAgentConfig,
+  resolveContinueGuardRetries,
   resolveAgentDir,
   resolveAgentEffectiveModelPrimary,
   resolveAgentExplicitModelPrimary,
@@ -320,5 +322,51 @@ describe("resolveAgentConfig", () => {
 
     const agentDir = resolveAgentDir({} as OpenClawConfig, "main");
     expect(agentDir).toBe(path.join(path.resolve(home), ".openclaw", "agents", "main", "agent"));
+  });
+});
+
+describe("resolveContinueGuardRetries", () => {
+  it("returns default retries when unset", () => {
+    expect(resolveContinueGuardRetries(undefined, "main")).toBe(DEFAULT_CONTINUE_GUARD_RETRIES);
+    expect(resolveContinueGuardRetries({}, "main")).toBe(DEFAULT_CONTINUE_GUARD_RETRIES);
+  });
+
+  it("uses agents.defaults override when set", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          continueGuardRetries: 1,
+        },
+      },
+    };
+    expect(resolveContinueGuardRetries(cfg, "main")).toBe(1);
+  });
+
+  it("uses per-agent override over defaults", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          continueGuardRetries: 1,
+        },
+        list: [
+          {
+            id: "main",
+            continueGuardRetries: 4,
+          },
+        ],
+      },
+    };
+    expect(resolveContinueGuardRetries(cfg, "main")).toBe(4);
+  });
+
+  it("allows zero to disable continue guard", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          continueGuardRetries: 0,
+        },
+      },
+    };
+    expect(resolveContinueGuardRetries(cfg, "main")).toBe(0);
   });
 });

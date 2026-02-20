@@ -115,6 +115,7 @@ export const AgentDefaultsSchema = z
     blockStreamingChunk: BlockStreamingChunkSchema.optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     humanDelay: HumanDelaySchema.optional(),
+    continueGuardRetries: z.number().int().nonnegative().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     mediaMaxMb: z.number().positive().optional(),
     imageMaxDimensionPx: z.number().int().positive().optional(),

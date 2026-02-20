@@ -17,6 +17,11 @@ export type AgentConfig = {
   memorySearch?: MemorySearchConfig;
   /** Human-like delay between block replies for this agent. */
   humanDelay?: HumanDelayConfig;
+  /**
+   * Continue-guard retries for end-turns without valid stop reason.
+   * Overrides agents.defaults.continueGuardRetries for this agent.
+   */
+  continueGuardRetries?: number;
   /** Optional per-agent heartbeat overrides. */
   heartbeat?: AgentDefaultsConfig["heartbeat"];
   identity?: IdentityConfig;

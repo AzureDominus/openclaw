@@ -81,6 +81,11 @@ const baseParams = {
 describe("overflow compaction in run loop", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockedRunEmbeddedAttempt.mockReset();
+    mockedBuildEmbeddedRunPayloads.mockReset();
+    mockedCompactDirect.mockReset();
+    mockedSessionLikelyHasOversizedToolResults.mockReset();
+    mockedTruncateOversizedToolResultsInSession.mockReset();
     mockedBuildEmbeddedRunPayloads.mockImplementation(() => []);
     mockedSessionLikelyHasOversizedToolResults.mockReturnValue(false);
     mockedTruncateOversizedToolResultsInSession.mockResolvedValue({
@@ -445,6 +450,118 @@ describe("overflow compaction in run loop", () => {
     expect(mockedRunEmbeddedAttempt.mock.calls[3]?.[0]?.prompt ?? "").toContain(
       "SYSTEM CONTINUE GUARD (3/3)",
     );
+  });
+
+  it("uses configured continue guard retry cap from agents.defaults", async () => {
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: ["Checking step 1."],
+          lastAssistant: { stopReason: "end_turn" } as EmbeddedRunAttemptResult["lastAssistant"],
+          toolMetas: [],
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: ["Checking step 2."],
+          lastAssistant: { stopReason: "end_turn" } as EmbeddedRunAttemptResult["lastAssistant"],
+          toolMetas: [],
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: ["Done.\nOPENCLAW_STOP_REASON: completed"],
+          lastAssistant: { stopReason: "end_turn" } as EmbeddedRunAttemptResult["lastAssistant"],
+          toolMetas: [],
+        }),
+      );
+
+    const result = await runEmbeddedPiAgent({
+      ...baseParams,
+      config: {
+        agents: {
+          defaults: {
+            continueGuardRetries: 1,
+          },
+        },
+      },
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(mockedRunEmbeddedAttempt.mock.calls[1]?.[0]?.prompt ?? "").toContain(
+      "SYSTEM CONTINUE GUARD (1/1)",
+    );
+    expect(result.meta.stopReasonDetail).toBeUndefined();
+  });
+
+  it("allows per-agent continue guard retry override", async () => {
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: ["Checking step 1."],
+          lastAssistant: { stopReason: "end_turn" } as EmbeddedRunAttemptResult["lastAssistant"],
+          toolMetas: [],
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: ["Checking step 2."],
+          lastAssistant: { stopReason: "end_turn" } as EmbeddedRunAttemptResult["lastAssistant"],
+          toolMetas: [],
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: ["Done.\nOPENCLAW_STOP_REASON: completed"],
+          lastAssistant: { stopReason: "end_turn" } as EmbeddedRunAttemptResult["lastAssistant"],
+          toolMetas: [],
+        }),
+      );
+
+    const result = await runEmbeddedPiAgent({
+      ...baseParams,
+      config: {
+        agents: {
+          defaults: {
+            continueGuardRetries: 1,
+          },
+          list: [{ id: "main", default: true, continueGuardRetries: 2 }],
+        },
+      },
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
+    expect(mockedRunEmbeddedAttempt.mock.calls[1]?.[0]?.prompt ?? "").toContain(
+      "SYSTEM CONTINUE GUARD (1/2)",
+    );
+    expect(mockedRunEmbeddedAttempt.mock.calls[2]?.[0]?.prompt ?? "").toContain(
+      "SYSTEM CONTINUE GUARD (2/2)",
+    );
+    expect(result.meta.stopReasonDetail).toBe("completed");
+  });
+
+  it("disables continue guard retries when configured to zero", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValue(
+      makeAttemptResult({
+        assistantTexts: ["Checking step 1."],
+        lastAssistant: { stopReason: "end_turn" } as EmbeddedRunAttemptResult["lastAssistant"],
+        toolMetas: [],
+      }),
+    );
+
+    await runEmbeddedPiAgent({
+      ...baseParams,
+      config: {
+        agents: {
+          defaults: {
+            continueGuardRetries: 0,
+          },
+        },
+      },
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(log.warn).not.toHaveBeenCalledWith(expect.stringContaining("continue guard retry"));
   });
 
   it("retries with continue guard when assistant emits a plain-text pseudo tool call", async () => {

@@ -244,6 +244,17 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("OPENCLAW_STOP_REASON: needs_user_input");
     expect(prompt).toContain("as the final line");
   });
+
+  it("omits stop-reason marker guidance when disabled", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      stopReasonTagEnabled: false,
+    });
+
+    expect(prompt).not.toContain("OPENCLAW_STOP_REASON: completed");
+    expect(prompt).not.toContain("OPENCLAW_STOP_REASON: needs_user_input");
+    expect(prompt).not.toContain("stop-reason marker as the final line");
+  });
   it("lists available tools when provided", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
