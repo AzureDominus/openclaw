@@ -413,6 +413,7 @@ describe("telegramMessageActions", () => {
         asVoice: true,
       }),
       cfg,
+      expect.objectContaining({ mediaLocalRoots: undefined }),
     );
   });
 
@@ -439,6 +440,7 @@ describe("telegramMessageActions", () => {
         silent: true,
       }),
       cfg,
+      expect.objectContaining({ mediaLocalRoots: undefined }),
     );
   });
 

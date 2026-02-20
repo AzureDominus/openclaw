@@ -245,6 +245,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "messages.suppressToolErrors": "Suppress Tool Error Warnings",
   "messages.ackReaction": "Ack Reaction Emoji",
   "messages.ackReactionScope": "Ack Reaction Scope",
+  "messages.mediaLocalRoots": "Outbound Media Local Roots",
   "messages.statusReactions": "Status Reactions",
   "messages.statusReactions.enabled": "Enable Status Reactions",
   "messages.statusReactions.emojis": "Status Reaction Emojis",

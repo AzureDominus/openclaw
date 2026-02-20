@@ -1,8 +1,9 @@
 import path from "node:path";
-import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { resolveUserPath } from "../utils.js";
 
 function buildMediaLocalRoots(stateDir: string): string[] {
   const resolvedStateDir = path.resolve(stateDir);
@@ -16,6 +17,25 @@ function buildMediaLocalRoots(stateDir: string): string[] {
   ];
 }
 
+function appendConfiguredMediaLocalRoots(roots: string[], cfg: OpenClawConfig): string[] {
+  const configuredRoots = cfg.messages?.mediaLocalRoots;
+  if (!configuredRoots || configuredRoots.length === 0) {
+    return roots;
+  }
+
+  for (const entry of configuredRoots) {
+    const trimmed = entry.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const normalized = resolveUserPath(trimmed);
+    if (!roots.includes(normalized)) {
+      roots.push(normalized);
+    }
+  }
+  return roots;
+}
+
 export function getDefaultMediaLocalRoots(): readonly string[] {
   return buildMediaLocalRoots(resolveStateDir());
 }
@@ -24,7 +44,7 @@ export function getAgentScopedMediaLocalRoots(
   cfg: OpenClawConfig,
   agentId?: string,
 ): readonly string[] {
-  const roots = buildMediaLocalRoots(resolveStateDir());
+  const roots = appendConfiguredMediaLocalRoots(buildMediaLocalRoots(resolveStateDir()), cfg);
   if (!agentId?.trim()) {
     return roots;
   }
