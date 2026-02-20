@@ -33,10 +33,6 @@ export async function queueEmbeddedPiMessage(
     diag.debug(`queue message failed: sessionId=${sessionId} reason=no_active_run`);
     return { status: "no-active" };
   }
-  if (!handle.isStreaming() && !handle.isCompacting()) {
-    diag.debug(`queue message failed: sessionId=${sessionId} reason=inactive`);
-    return { status: "inactive" };
-  }
   try {
     logMessageQueued({ sessionId, source: "pi-embedded-runner" });
     await handle.queueMessage(text);
