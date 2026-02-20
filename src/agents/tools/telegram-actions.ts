@@ -92,9 +92,7 @@ export function readTelegramButtons(
 export async function handleTelegramAction(
   params: Record<string, unknown>,
   cfg: OpenClawConfig,
-  options?: {
-    mediaLocalRoots?: readonly string[];
-  },
+  options?: { mediaLocalRoots?: readonly string[] },
 ): Promise<AgentToolResult<unknown>> {
   const { action, accountId } = {
     action: readStringParam(params, "action", { required: true }),
