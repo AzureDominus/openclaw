@@ -1,7 +1,7 @@
+import type { Chat, Message } from "@grammyjs/types";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { Chat, Message } from "@grammyjs/types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { escapeRegExp, formatEnvelopeTimestamp } from "../../test/helpers/envelope-timestamp.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -590,6 +590,100 @@ describe("createTelegramBot", () => {
       me: { username: "openclaw_bot" },
       getFile: async () => ({}),
     });
+    expect(replySpy).toHaveBeenCalledTimes(1);
+  });
+  it("does not drop queued lower update ids after a higher update was processed", async () => {
+    onSpy.mockReset();
+    replySpy.mockReset();
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: { dmPolicy: "open", allowFrom: ["*"] },
+      },
+    });
+
+    createTelegramBot({
+      token: "tok",
+      updateOffset: {
+        lastUpdateId: 100,
+      },
+    });
+
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler({
+      update: { update_id: 102 },
+      message: {
+        chat: { id: 123, type: "private" },
+        from: { id: 456, username: "testuser" },
+        text: "first",
+        date: 1736380800,
+        message_id: 42,
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    await handler({
+      update: { update_id: 101 },
+      message: {
+        chat: { id: 123, type: "private" },
+        from: { id: 456, username: "testuser" },
+        text: "second",
+        date: 1736380801,
+        message_id: 43,
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(2);
+  });
+  it("still skips updates at or below startup offset", async () => {
+    onSpy.mockReset();
+    replySpy.mockReset();
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: { dmPolicy: "open", allowFrom: ["*"] },
+      },
+    });
+
+    createTelegramBot({
+      token: "tok",
+      updateOffset: {
+        lastUpdateId: 100,
+      },
+    });
+
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler({
+      update: { update_id: 100 },
+      message: {
+        chat: { id: 123, type: "private" },
+        from: { id: 456, username: "testuser" },
+        text: "should skip",
+        date: 1736380800,
+        message_id: 40,
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    await handler({
+      update: { update_id: 101 },
+      message: {
+        chat: { id: 123, type: "private" },
+        from: { id: 456, username: "testuser" },
+        text: "should process",
+        date: 1736380801,
+        message_id: 41,
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
     expect(replySpy).toHaveBeenCalledTimes(1);
   });
 

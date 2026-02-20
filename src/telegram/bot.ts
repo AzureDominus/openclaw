@@ -1,8 +1,10 @@
+import type { ApiClientOptions } from "grammy";
 import { sequentialize } from "@grammyjs/runner";
 import { apiThrottler } from "@grammyjs/transformer-throttler";
 import { type Message, type UserFromGetMe } from "@grammyjs/types";
-import type { ApiClientOptions } from "grammy";
 import { Bot, webhookCallback } from "grammy";
+import type { OpenClawConfig, ReplyToMode } from "../config/config.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { isAbortRequestText } from "../auto-reply/reply/abort.js";
@@ -12,7 +14,6 @@ import {
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
 } from "../config/commands.js";
-import type { OpenClawConfig, ReplyToMode } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import {
   resolveChannelGroupPolicy,
@@ -23,7 +24,7 @@ import { danger, logVerbose, shouldLogVerbose } from "../globals.js";
 import { formatUncaughtError } from "../infra/errors.js";
 import { getChildLogger } from "../logging.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { createNonExitingRuntime, type RuntimeEnv } from "../runtime.js";
+import { createNonExitingRuntime } from "../runtime.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { registerTelegramHandlers } from "./bot-handlers.js";
 import { createTelegramMessageProcessor } from "./bot-message.js";
@@ -148,16 +149,17 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   });
 
   const recentUpdates = createTelegramUpdateDedupe();
-  const initialUpdateId =
+  const startupUpdateIdFloor =
     typeof opts.updateOffset?.lastUpdateId === "number" ? opts.updateOffset.lastUpdateId : null;
+  let lastUpdateId = startupUpdateIdFloor;
 
   // Track update_ids that have entered the middleware pipeline but have not completed yet.
   // This includes updates that are "queued" behind sequentialize(...) for a chat/topic key.
   // We only persist a watermark that is strictly less than the smallest pending update_id,
   // so we never write an offset that would skip an update still waiting to run.
   const pendingUpdateIds = new Set<number>();
-  let highestCompletedUpdateId: number | null = initialUpdateId;
-  let highestPersistedUpdateId: number | null = initialUpdateId;
+  let highestCompletedUpdateId: number | null = startupUpdateIdFloor;
+  let highestPersistedUpdateId: number | null = startupUpdateIdFloor;
   const maybePersistSafeWatermark = () => {
     if (typeof opts.updateOffset?.onUpdateId !== "function") {
       return;
@@ -186,9 +188,10 @@ export function createTelegramBot(opts: TelegramBotOptions) {
 
   const shouldSkipUpdate = (ctx: TelegramUpdateKeyContext) => {
     const updateId = resolveTelegramUpdateId(ctx);
-    const skipCutoff = highestPersistedUpdateId ?? initialUpdateId;
-    if (typeof updateId === "number" && skipCutoff !== null && updateId <= skipCutoff) {
-      return true;
+    if (typeof updateId === "number" && startupUpdateIdFloor !== null) {
+      if (updateId <= startupUpdateIdFloor) {
+        return true;
+      }
     }
     const key = buildTelegramUpdateKey(ctx);
     const skipped = recentUpdates.check(key);
