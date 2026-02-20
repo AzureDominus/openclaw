@@ -49,7 +49,7 @@ import {
   pickFallbackThinkingLevel,
   type FailoverReason,
 } from "../pi-embedded-helpers.js";
-import { extractDeclaredStopReason } from "../stop-reason.js";
+import { extractDeclaredStopReason, stripDeclaredStopReasonLine } from "../stop-reason.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { compactEmbeddedPiSessionDirect } from "./compact.js";
@@ -72,6 +72,7 @@ const ANTHROPIC_MAGIC_STRING_REPLACEMENT = "ANTHROPIC MAGIC STRING TRIGGER REFUS
 const MAX_END_TURN_CONTINUE_GUARD_RETRIES = 3;
 
 type ContinueGuardStopReason = "completed" | "needs_user_input";
+type EmbeddedRunPayload = ReturnType<typeof buildEmbeddedRunPayloads>[number];
 
 function scrubAnthropicRefusalMagic(prompt: string): string {
   if (!prompt.includes(ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL)) {
@@ -225,6 +226,25 @@ function buildContinueGuardPrompt(attempt: number): string {
     "If you are not done and do not need user input, do not end turn; call the next tool now.",
     "Empty or invalid stop reasons are not allowed.",
   ].join("\n");
+}
+
+function hasDeliverablePayloadAfterStopReasonStrip(payload: EmbeddedRunPayload): boolean {
+  const strippedText =
+    typeof payload.text === "string" ? stripDeclaredStopReasonLine(payload.text) : "";
+  if (strippedText.trim().length > 0) {
+    return true;
+  }
+  if ((payload.mediaUrls?.length ?? 0) > 0) {
+    return true;
+  }
+  if (typeof payload.mediaUrl === "string" && payload.mediaUrl.trim().length > 0) {
+    return true;
+  }
+  return false;
+}
+
+function hasAnyDeliverablePayloadAfterStopReasonStrip(payloads: EmbeddedRunPayload[]): boolean {
+  return payloads.some((payload) => hasDeliverablePayloadAfterStopReasonStrip(payload));
 }
 
 async function appendStopReasonSessionLog(params: {
@@ -568,6 +588,7 @@ export async function runEmbeddedPiAgent(
       let runLoopIterations = 0;
       let continueGuardRetries = 0;
       let continueGuardPrompt: string | undefined;
+      let continueGuardFallbackPayloads: EmbeddedRunPayload[] | undefined;
       const continueGuardNotices: string[] = [];
       const shouldSurfaceContinueGuardNotice =
         params.messageChannel === INTERNAL_MESSAGE_CHANNEL ||
@@ -607,6 +628,7 @@ export async function runEmbeddedPiAgent(
           attemptedThinking.add(thinkLevel);
           await fs.mkdir(resolvedWorkspace, { recursive: true });
 
+          const isContinueGuardAttempt = Boolean(continueGuardPrompt);
           const promptText = continueGuardPrompt ?? params.prompt;
           continueGuardPrompt = undefined;
           const prompt =
@@ -654,14 +676,16 @@ export async function runEmbeddedPiAgent(
             abortSignal: params.abortSignal,
             shouldEmitToolResult: params.shouldEmitToolResult,
             shouldEmitToolOutput: params.shouldEmitToolOutput,
-            onPartialReply: params.onPartialReply,
-            onAssistantMessageStart: params.onAssistantMessageStart,
-            onBlockReply: params.onBlockReply,
-            onBlockReplyFlush: params.onBlockReplyFlush,
+            onPartialReply: isContinueGuardAttempt ? undefined : params.onPartialReply,
+            onAssistantMessageStart: isContinueGuardAttempt
+              ? undefined
+              : params.onAssistantMessageStart,
+            onBlockReply: isContinueGuardAttempt ? undefined : params.onBlockReply,
+            onBlockReplyFlush: isContinueGuardAttempt ? undefined : params.onBlockReplyFlush,
             blockReplyBreak: params.blockReplyBreak,
             blockReplyChunking: params.blockReplyChunking,
-            onReasoningStream: params.onReasoningStream,
-            onReasoningEnd: params.onReasoningEnd,
+            onReasoningStream: isContinueGuardAttempt ? undefined : params.onReasoningStream,
+            onReasoningEnd: isContinueGuardAttempt ? undefined : params.onReasoningEnd,
             onToolResult: params.onToolResult,
             onAgentEvent: params.onAgentEvent,
             extraSystemPrompt: params.extraSystemPrompt,
@@ -1114,6 +1138,24 @@ export async function runEmbeddedPiAgent(
             !declaredStopReason &&
             continueGuardRetries < MAX_END_TURN_CONTINUE_GUARD_RETRIES;
           if (shouldRetryForMissingStopReason) {
+            const candidatePayloads = buildEmbeddedRunPayloads({
+              assistantTexts: attempt.assistantTexts ?? [],
+              toolMetas: attempt.toolMetas ?? [],
+              lastAssistant: attempt.lastAssistant,
+              lastToolError: attempt.lastToolError,
+              config: params.config,
+              sessionKey: params.sessionKey ?? params.sessionId,
+              provider: activeErrorContext.provider,
+              model: activeErrorContext.model,
+              verboseLevel: params.verboseLevel,
+              reasoningLevel: params.reasoningLevel,
+              toolResultFormat: resolvedToolResultFormat,
+              suppressToolErrorWarnings: params.suppressToolErrorWarnings,
+              inlineToolResultsAllowed: false,
+            });
+            if (hasAnyDeliverablePayloadAfterStopReasonStrip(candidatePayloads)) {
+              continueGuardFallbackPayloads = candidatePayloads;
+            }
             continueGuardRetries += 1;
             continueGuardPrompt = buildContinueGuardPrompt(continueGuardRetries);
             log.warn(
@@ -1159,6 +1201,17 @@ export async function runEmbeddedPiAgent(
             suppressToolErrorWarnings: params.suppressToolErrorWarnings,
             inlineToolResultsAllowed: false,
           });
+          if (
+            !hasAnyDeliverablePayloadAfterStopReasonStrip(payloads) &&
+            continueGuardFallbackPayloads &&
+            hasAnyDeliverablePayloadAfterStopReasonStrip(continueGuardFallbackPayloads)
+          ) {
+            // Continue-guard retries can end with a stop-reason-only marker. Preserve the last
+            // user-facing pre-guard reply so channel delivery doesn't drop to empty.
+            payloads = shouldSurfaceContinueGuardNotice
+              ? [...continueGuardFallbackPayloads, ...payloads]
+              : [...continueGuardFallbackPayloads];
+          }
           if (shouldSurfaceContinueGuardNotice && continueGuardNotices.length > 0) {
             payloads = [...continueGuardNotices.map((text) => ({ text })), ...payloads];
           }

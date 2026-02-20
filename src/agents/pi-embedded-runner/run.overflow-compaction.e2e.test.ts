@@ -54,12 +54,14 @@ import { log } from "./logger.js";
 import { runEmbeddedPiAgent } from "./run.js";
 import { makeAttemptResult, mockOverflowRetrySuccess } from "./run.overflow-compaction.fixture.js";
 import { runEmbeddedAttempt } from "./run/attempt.js";
+import { buildEmbeddedRunPayloads } from "./run/payloads.js";
 import {
   sessionLikelyHasOversizedToolResults,
   truncateOversizedToolResultsInSession,
 } from "./tool-result-truncation.js";
 
 const mockedRunEmbeddedAttempt = vi.mocked(runEmbeddedAttempt);
+const mockedBuildEmbeddedRunPayloads = vi.mocked(buildEmbeddedRunPayloads);
 const mockedCompactDirect = vi.mocked(compactEmbeddedPiSessionDirect);
 const mockedSessionLikelyHasOversizedToolResults = vi.mocked(sessionLikelyHasOversizedToolResults);
 const mockedTruncateOversizedToolResultsInSession = vi.mocked(
@@ -79,6 +81,7 @@ const baseParams = {
 describe("overflow compaction in run loop", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockedBuildEmbeddedRunPayloads.mockImplementation(() => []);
     mockedSessionLikelyHasOversizedToolResults.mockReturnValue(false);
     mockedTruncateOversizedToolResultsInSession.mockResolvedValue({
       truncated: false,
@@ -470,5 +473,41 @@ describe("overflow compaction in run loop", () => {
     expect(
       result.payloads?.some((payload) => (payload.text ?? "").includes("OPENCLAW_STOP_REASON")),
     ).toBe(true);
+  });
+
+  it("suppresses partial stream callbacks during continue-guard retries and preserves prior reply when completion is marker-only", async () => {
+    mockedBuildEmbeddedRunPayloads.mockImplementation((params) =>
+      (params.assistantTexts ?? []).map((text) => ({ text })),
+    );
+    const onPartialReply = vi.fn();
+
+    mockedRunEmbeddedAttempt
+      .mockImplementationOnce(async (params) => {
+        await params.onPartialReply?.({ text: "First answer." });
+        return makeAttemptResult({
+          assistantTexts: ["First answer."],
+          lastAssistant: { stopReason: "end_turn" } as EmbeddedRunAttemptResult["lastAssistant"],
+          toolMetas: [],
+        });
+      })
+      .mockImplementationOnce(async (params) => {
+        await params.onPartialReply?.({ text: "OPENCLAW_STOP_REASON: completed" });
+        return makeAttemptResult({
+          assistantTexts: ["OPENCLAW_STOP_REASON: completed"],
+          lastAssistant: { stopReason: "end_turn" } as EmbeddedRunAttemptResult["lastAssistant"],
+          toolMetas: [],
+        });
+      });
+
+    const result = await runEmbeddedPiAgent({
+      ...baseParams,
+      onPartialReply,
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(mockedRunEmbeddedAttempt.mock.calls[1]?.[0]?.onPartialReply).toBeUndefined();
+    expect(onPartialReply).toHaveBeenCalledTimes(1);
+    expect(result.payloads?.[0]?.text).toBe("First answer.");
+    expect(result.meta.stopReasonDetail).toBe("completed");
   });
 });
