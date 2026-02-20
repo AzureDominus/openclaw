@@ -119,6 +119,13 @@ export type MessagesConfig = {
   statusReactions?: StatusReactionsConfig;
   /** When true, suppress ⚠️ tool-error warnings from being shown to the user. Default: false. */
   suppressToolErrors?: boolean;
+  /**
+   * Additional local directory roots allowed for outbound media attachments.
+   *
+   * These are merged with built-in defaults (tmp/media/agents/workspace/sandboxes).
+   * Use absolute paths or `~`-prefixed paths.
+   */
+  mediaLocalRoots?: string[];
   /** Text-to-speech settings for outbound replies. */
   tts?: TtsConfig;
 };

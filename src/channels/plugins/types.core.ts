@@ -323,6 +323,11 @@ export type ChannelMessageActionContext = {
     mode: GatewayClientMode;
   };
   toolContext?: ChannelThreadingToolContext;
+  /**
+   * Server-injected local roots allowed for media attachments.
+   * This must not be model-controlled input.
+   */
+  mediaLocalRoots?: readonly string[];
   dryRun?: boolean;
 };
 

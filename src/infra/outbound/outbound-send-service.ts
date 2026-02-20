@@ -1,13 +1,13 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import { dispatchChannelMessageAction } from "../../channels/plugins/message-actions.js";
 import type { ChannelId, ChannelThreadingToolContext } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
-import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import type { GatewayClientMode, GatewayClientName } from "../../utils/message-channel.js";
-import { throwIfAborted } from "./abort.js";
 import type { OutboundSendDeps } from "./deliver.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
+import { dispatchChannelMessageAction } from "../../channels/plugins/message-actions.js";
+import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
+import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
+import { throwIfAborted } from "./abort.js";
 import { sendMessage, sendPoll } from "./message.js";
 import { extractToolPayload } from "./tool-payload.js";
 
@@ -29,6 +29,11 @@ export type OutboundSendContext = {
   accountId?: string | null;
   gateway?: OutboundGatewayContext;
   toolContext?: ChannelThreadingToolContext;
+  /**
+   * Optional precomputed local roots for outbound media. If omitted,
+   * executeSendAction derives roots from cfg + agentId.
+   */
+  mediaLocalRoots?: readonly string[];
   deps?: OutboundSendDeps;
   dryRun: boolean;
   mirror?: {
@@ -55,10 +60,9 @@ async function tryHandleWithPluginAction(params: {
   if (params.ctx.dryRun) {
     return null;
   }
-  const mediaLocalRoots = getAgentScopedMediaLocalRoots(
-    params.ctx.cfg,
-    params.ctx.agentId ?? params.ctx.mirror?.agentId,
-  );
+  const mediaLocalRoots =
+    params.ctx.mediaLocalRoots ??
+    getAgentScopedMediaLocalRoots(params.ctx.cfg, params.ctx.agentId ?? params.ctx.mirror?.agentId);
   const handled = await dispatchChannelMessageAction({
     channel: params.ctx.channel,
     action: params.action,
