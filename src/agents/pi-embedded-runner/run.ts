@@ -207,9 +207,9 @@ function shouldGuardOnEndTurn(stopReason: string | undefined): boolean {
 function buildContinueGuardPrompt(attempt: number): string {
   return [
     `SYSTEM CONTINUE GUARD (${attempt}/${MAX_END_TURN_CONTINUE_GUARD_RETRIES}):`,
-    "Your previous assistant turn ended without calling a tool.",
-    "If you are done, start your response with exactly: OPENCLAW_STOP_REASON: completed",
-    "If you need user input to continue, start with exactly: OPENCLAW_STOP_REASON: needs_user_input",
+    "Your previous assistant turn ended without calling a tool and without a valid OPENCLAW_STOP_REASON tag.",
+    "If you are done, end your response with exactly: OPENCLAW_STOP_REASON: completed",
+    "If you need user input to continue, end your response with exactly: OPENCLAW_STOP_REASON: needs_user_input",
     "If you are not done and do not need user input, do not end turn; call the next tool now.",
     "Empty or invalid stop reasons are not allowed.",
   ].join("\n");
@@ -1110,11 +1110,11 @@ export async function runEmbeddedPiAgent(
             continueGuardRetries += 1;
             continueGuardPrompt = buildContinueGuardPrompt(continueGuardRetries);
             log.warn(
-              `continue guard retry ${continueGuardRetries}/${MAX_END_TURN_CONTINUE_GUARD_RETRIES} for run ${params.runId}: missing/invalid OPENCLAW_STOP_REASON`,
+              `continue guard retry ${continueGuardRetries}/${MAX_END_TURN_CONTINUE_GUARD_RETRIES} for run ${params.runId}: ended without tool call and missing/invalid OPENCLAW_STOP_REASON`,
             );
             if (shouldSurfaceContinueGuardNotice) {
               continueGuardNotices.push(
-                `Continue guard ${continueGuardRetries}/${MAX_END_TURN_CONTINUE_GUARD_RETRIES}: model ended turn without tool call or valid OPENCLAW_STOP_REASON. Retrying.`,
+                `Continue guard ${continueGuardRetries}/${MAX_END_TURN_CONTINUE_GUARD_RETRIES}: model ended turn without a tool call and without a valid OPENCLAW_STOP_REASON tag. Retrying.`,
               );
             }
             continue;
