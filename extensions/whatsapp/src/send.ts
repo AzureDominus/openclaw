@@ -25,10 +25,12 @@ import { loadOutboundMediaFromUrl } from "./outbound-media.runtime.js";
 import { markdownToWhatsApp, toWhatsappJid } from "./text-runtime.js";
 
 const outboundLog = createSubsystemLogger("gateway/channels/whatsapp").child("outbound");
+const WHATSAPP_OVERSIZE_DOC_MAX_BYTES = 5 * 1024 * 1024;
 
 function shouldSendWhatsAppImageAsDocument(params: {
   mode?: "image" | "document" | "auto";
   mediaUrl?: string;
+  buffer: Buffer;
 }): boolean {
   const mode = params.mode ?? "image";
   if (mode === "document") {
@@ -37,7 +39,10 @@ function shouldSendWhatsAppImageAsDocument(params: {
   if (mode === "image") {
     return false;
   }
-  return isLikelyBrowserScreenshotMediaUrl(params.mediaUrl);
+  return (
+    isLikelyBrowserScreenshotMediaUrl(params.mediaUrl) &&
+    params.buffer.byteLength > WHATSAPP_OVERSIZE_DOC_MAX_BYTES
+  );
 }
 
 function resolveOutboundWhatsAppAccountId(params: {
@@ -156,6 +161,7 @@ export async function sendMessageWhatsApp(
         sendImageAsDocument = shouldSendWhatsAppImageAsDocument({
           mode: account.imageUploadMode,
           mediaUrl: primaryMediaUrl,
+          buffer: media.buffer,
         });
         if (sendImageAsDocument) {
           documentFileName = media.fileName;
