@@ -4,9 +4,24 @@
 
 import { PREVIEW_MAX_CHARS, PREVIEW_MAX_LINES } from "./constants.ts";
 
+function wrapCodeBlock(content: string, language = "text"): string {
+  const maxRun = Math.max(2, ...Array.from(content.matchAll(/`+/g), (match) => match[0].length));
+  const fence = "`".repeat(maxRun + 1);
+  return `${fence}${language}\n${content}\n${fence}`;
+}
+
+export function formatToolCallForSidebar(name: string, args: unknown): string {
+  const payload = {
+    type: "tool_call",
+    name,
+    arguments: args ?? {},
+  };
+  return wrapCodeBlock(JSON.stringify(payload, null, 2), "json");
+}
+
 /**
  * Format tool output content for display in the sidebar.
- * Detects JSON and wraps it in a code block with formatting.
+ * Detects JSON and always returns a fenced code block for raw inspection.
  */
 export function formatToolOutputForSidebar(text: string): string {
   const trimmed = text.trim();
@@ -14,12 +29,12 @@ export function formatToolOutputForSidebar(text: string): string {
   if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
     try {
       const parsed = JSON.parse(trimmed);
-      return "```json\n" + JSON.stringify(parsed, null, 2) + "\n```";
+      return wrapCodeBlock(JSON.stringify(parsed, null, 2), "json");
     } catch {
-      // Not valid JSON, return as-is
+      // Not valid JSON; fall through to text.
     }
   }
-  return text;
+  return wrapCodeBlock(text, "text");
 }
 
 /**
