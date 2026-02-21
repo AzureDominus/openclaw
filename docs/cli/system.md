@@ -23,7 +23,8 @@ openclaw system presence
 
 ## `system event`
 
-Enqueue a system event on the **main** session. The next heartbeat will inject
+Enqueue a system event. By default this targets the main session; you can
+optionally target a specific agent/session key. The next heartbeat will inject
 it as a `System:` line in the prompt. Use `--mode now` to trigger the heartbeat
 immediately; `next-heartbeat` waits for the next scheduled tick.
 
@@ -31,6 +32,8 @@ Flags:
 
 - `--text <text>`: required system event text.
 - `--mode <mode>`: `now` or `next-heartbeat` (default).
+- `--agent <agentId>`: optional target agent id.
+- `--session-key <sessionKey>`: optional target session key.
 - `--json`: machine-readable output.
 
 ## `system heartbeat last|enable|disable`
