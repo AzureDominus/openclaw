@@ -1,16 +1,28 @@
 import { html, nothing } from "lit";
+import type { ToolCard } from "../types/chat-types.ts";
 import { icons } from "../icons.ts";
 import { formatToolDetail, resolveToolDisplay } from "../tool-display.ts";
-import type { ToolCard } from "../types/chat-types.ts";
 import { TOOL_INLINE_THRESHOLD } from "./constants.ts";
 import { extractTextCached } from "./message-extract.ts";
 import { isToolResultMessage } from "./message-normalizer.ts";
-import { formatToolOutputForSidebar, getTruncatedPreview } from "./tool-helpers.ts";
+import {
+  formatToolCallForSidebar,
+  formatToolOutputForSidebar,
+  getTruncatedPreview,
+} from "./tool-helpers.ts";
+
+type PendingToolCall = {
+  id: string | null;
+  name: string;
+  args: unknown;
+  consumed: boolean;
+};
 
 export function extractToolCards(message: unknown): ToolCard[] {
   const m = message as Record<string, unknown>;
   const content = normalizeContent(m.content);
   const cards: ToolCard[] = [];
+  const pendingCalls: PendingToolCall[] = [];
 
   for (const item of content) {
     const kind = (typeof item.type === "string" ? item.type : "").toLowerCase();
@@ -18,10 +30,18 @@ export function extractToolCards(message: unknown): ToolCard[] {
       ["toolcall", "tool_call", "tooluse", "tool_use"].includes(kind) ||
       (typeof item.name === "string" && item.arguments != null);
     if (isToolCall) {
+      const name = (item.name as string) ?? "tool";
+      const args = coerceArgs(item.arguments ?? item.args);
+      pendingCalls.push({
+        id: extractToolCallId(item),
+        name,
+        args,
+        consumed: false,
+      });
       cards.push({
         kind: "call",
-        name: (item.name as string) ?? "tool",
-        args: coerceArgs(item.arguments ?? item.args),
+        name,
+        args,
       });
     }
   }
@@ -33,7 +53,9 @@ export function extractToolCards(message: unknown): ToolCard[] {
     }
     const text = extractToolText(item);
     const name = typeof item.name === "string" ? item.name : "tool";
-    cards.push({ kind: "result", name, text });
+    const callId = extractToolCallId(item);
+    const matchedCall = resolveMatchingCall(pendingCalls, name, callId);
+    cards.push({ kind: "result", name, args: matchedCall?.args, text });
   }
 
   if (isToolResultMessage(message) && !cards.some((card) => card.kind === "result")) {
@@ -41,8 +63,11 @@ export function extractToolCards(message: unknown): ToolCard[] {
       (typeof m.toolName === "string" && m.toolName) ||
       (typeof m.tool_name === "string" && m.tool_name) ||
       "tool";
+    const fallbackArgs = coerceArgs(
+      m.toolArgs ?? m.tool_args ?? m.args ?? m.arguments ?? m.input ?? m.toolInput ?? m.tool_input,
+    );
     const text = extractTextCached(message) ?? undefined;
-    cards.push({ kind: "result", name, text });
+    cards.push({ kind: "result", name, args: fallbackArgs, text });
   }
 
   return cards;
@@ -56,14 +81,14 @@ export function renderToolCardSidebar(card: ToolCard, onOpenSidebar?: (content: 
   const canClick = Boolean(onOpenSidebar);
   const handleClick = canClick
     ? () => {
-        if (hasText) {
-          onOpenSidebar!(formatToolOutputForSidebar(card.text!));
-          return;
-        }
-        const info = `## ${display.label}\n\n${
-          detail ? `**Command:** \`${detail}\`\n\n` : ""
-        }*No output — tool completed successfully.*`;
-        onOpenSidebar!(info);
+        const sections = [
+          `## ${display.label}`,
+          "### Tool Call",
+          formatToolCallForSidebar(card.name, card.args),
+          "### Tool Output",
+          hasText ? formatToolOutputForSidebar(card.text!) : "_No output returned by the tool._",
+        ];
+        onOpenSidebar!(sections.join("\n\n"));
       }
     : undefined;
 
@@ -96,9 +121,7 @@ export function renderToolCardSidebar(card: ToolCard, onOpenSidebar?: (content: 
           <span>${display.label}</span>
         </div>
         ${
-          canClick
-            ? html`<span class="chat-tool-card__action">${hasText ? "View" : ""} ${icons.check}</span>`
-            : nothing
+          canClick ? html`<span class="chat-tool-card__action">View ${icons.check}</span>` : nothing
         }
         ${isEmpty && !canClick ? html`<span class="chat-tool-card__status">${icons.check}</span>` : nothing}
       </div>
@@ -145,12 +168,72 @@ function coerceArgs(value: unknown): unknown {
   }
 }
 
+function extractToolCallId(item: Record<string, unknown>): string | null {
+  const value =
+    item.toolCallId ?? item.tool_call_id ?? item.toolUseId ?? item.tool_use_id ?? item.id ?? null;
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
+function resolveMatchingCall(
+  pendingCalls: PendingToolCall[],
+  name: string,
+  callId: string | null,
+): PendingToolCall | undefined {
+  if (callId) {
+    const byId = pendingCalls.find((entry) => entry.id === callId);
+    if (byId) {
+      byId.consumed = true;
+      return byId;
+    }
+  }
+  const nextByName = pendingCalls.find((entry) => !entry.consumed && entry.name === name);
+  if (nextByName) {
+    nextByName.consumed = true;
+    return nextByName;
+  }
+  return pendingCalls.find((entry) => entry.name === name);
+}
+
+function stringifyToolValue(value: unknown): string | undefined {
+  if (value === null || value === undefined) {
+    return undefined;
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    const textParts = value
+      .map((item) => {
+        if (!item || typeof item !== "object") {
+          return null;
+        }
+        const record = item as Record<string, unknown>;
+        if (record.type === "text" && typeof record.text === "string") {
+          return record.text;
+        }
+        return null;
+      })
+      .filter((part): part is string => Boolean(part));
+    if (textParts.length > 0) {
+      return textParts.join("\n");
+    }
+  }
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return "[unserializable tool output]";
+  }
+}
+
 function extractToolText(item: Record<string, unknown>): string | undefined {
-  if (typeof item.text === "string") {
-    return item.text;
-  }
-  if (typeof item.content === "string") {
-    return item.content;
-  }
-  return undefined;
+  return (
+    stringifyToolValue(item.text) ??
+    stringifyToolValue(item.content) ??
+    stringifyToolValue(item.result) ??
+    stringifyToolValue(item.output) ??
+    undefined
+  );
 }
