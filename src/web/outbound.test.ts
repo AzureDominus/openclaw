@@ -12,9 +12,6 @@ const TINY_PNG_BUFFER = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7+8f8AAAAASUVORK5CYII=",
   "base64",
 );
-const TALL_SVG_BUFFER = Buffer.from(
-  '<svg xmlns="http://www.w3.org/2000/svg" width="1265" height="4831"></svg>',
-);
 vi.mock("./media.js", () => ({
   loadWebMedia: (...args: unknown[]) => loadWebMediaMock(...args),
 }));
@@ -206,8 +203,10 @@ describe("web outbound", () => {
     expect(sendMessage).toHaveBeenLastCalledWith("+1555", "pic", buf, "image/jpeg");
   });
 
-  it("sends tall browser screenshots as documents in auto mode", async () => {
-    const buf = TALL_SVG_BUFFER;
+  it("keeps tall browser screenshots as images in auto mode when size is within limit", async () => {
+    const buf = Buffer.from(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="1265" height="4831"></svg>',
+    );
     loadConfigMock.mockReturnValue({
       channels: { whatsapp: { imageUploadMode: "auto" } },
     });
@@ -223,16 +222,7 @@ describe("web outbound", () => {
       mediaUrl: "/home/user/.openclaw/media/browser/long.png",
     });
 
-    expect(sendMessage).toHaveBeenLastCalledWith(
-      "+1555",
-      "pic",
-      expect.any(Buffer),
-      "image/png",
-      expect.objectContaining({
-        sendImageAsDocument: true,
-        fileName: "long.png",
-      }),
-    );
+    expect(sendMessage).toHaveBeenLastCalledWith("+1555", "pic", buf, "image/png");
   });
 
   it("maps other kinds to document with filename", async () => {

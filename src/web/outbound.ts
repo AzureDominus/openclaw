@@ -7,7 +7,6 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { convertMarkdownTables } from "../markdown/tables.js";
 import { markdownToWhatsApp } from "../markdown/whatsapp.js";
 import { isLikelyBrowserScreenshotMediaUrl } from "../media/browser-screenshot.js";
-import { getImageMetadata } from "../media/image-ops.js";
 import { normalizePollInput, type PollInput } from "../polls.js";
 import { toWhatsappJid } from "../utils.js";
 import { resolveWhatsAppAccount } from "./accounts.js";
@@ -15,7 +14,6 @@ import { type ActiveWebSendOptions, requireActiveWebListener } from "./active-li
 import { loadWebMedia } from "./media.js";
 
 const outboundLog = createSubsystemLogger("gateway/channels/whatsapp").child("outbound");
-const WHATSAPP_OVERSIZE_DOC_MAX_SIDE = 4096;
 const WHATSAPP_OVERSIZE_DOC_MAX_BYTES = 5 * 1024 * 1024;
 const MB = 1024 * 1024;
 
@@ -45,13 +43,7 @@ async function shouldSendWhatsAppImageAsDocument(params: {
   if (!isLikelyBrowserScreenshotMediaUrl(params.mediaUrl)) {
     return false;
   }
-  if (params.buffer.byteLength > WHATSAPP_OVERSIZE_DOC_MAX_BYTES) {
-    return true;
-  }
-  const meta = await getImageMetadata(params.buffer).catch(() => null);
-  const width = Number(meta?.width ?? 0);
-  const height = Number(meta?.height ?? 0);
-  return width > WHATSAPP_OVERSIZE_DOC_MAX_SIDE || height > WHATSAPP_OVERSIZE_DOC_MAX_SIDE;
+  return params.buffer.byteLength > WHATSAPP_OVERSIZE_DOC_MAX_BYTES;
 }
 
 export async function sendMessageWhatsApp(
