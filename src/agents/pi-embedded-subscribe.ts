@@ -1,10 +1,15 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { InlineCodeState } from "../markdown/code-spans.js";
+import type {
+  EmbeddedPiSubscribeContext,
+  EmbeddedPiSubscribeState,
+} from "./pi-embedded-subscribe.handlers.types.js";
+import type { SubscribeEmbeddedPiSessionParams } from "./pi-embedded-subscribe.types.js";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { InlineCodeState } from "../markdown/code-spans.js";
 import { buildCodeSpanIndex, createInlineCodeState } from "../markdown/code-spans.js";
 import { EmbeddedBlockChunker } from "./pi-embedded-block-chunker.js";
 import {
@@ -12,12 +17,7 @@ import {
   normalizeTextForComparison,
 } from "./pi-embedded-helpers.js";
 import { createEmbeddedPiSessionEventHandler } from "./pi-embedded-subscribe.handlers.js";
-import type {
-  EmbeddedPiSubscribeContext,
-  EmbeddedPiSubscribeState,
-} from "./pi-embedded-subscribe.handlers.types.js";
 import { filterToolResultMediaUrls } from "./pi-embedded-subscribe.tools.js";
-import type { SubscribeEmbeddedPiSessionParams } from "./pi-embedded-subscribe.types.js";
 import { formatReasoningMessage, stripDowngradedToolCallText } from "./pi-embedded-utils.js";
 import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
 
@@ -26,7 +26,9 @@ const FINAL_TAG_SCAN_RE = /<\s*(\/?)\s*final\s*>/gi;
 const log = createSubsystemLogger("agent/embedded");
 
 export type {
+  AssistantTextSegment,
   BlockReplyChunking,
+  EmbeddedReplyPayload,
   SubscribeEmbeddedPiSessionParams,
   ToolResultFormat,
 } from "./pi-embedded-subscribe.types.js";
@@ -37,6 +39,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   const useMarkdown = toolResultFormat === "markdown";
   const state: EmbeddedPiSubscribeState = {
     assistantTexts: [],
+    assistantTextSegments: [],
+    assistantSegmentId: undefined,
     toolMetas: [],
     toolMetaById: new Map(),
     toolSummaryById: new Set(),
@@ -89,6 +93,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   let compactionCount = 0;
 
   const assistantTexts = state.assistantTexts;
+  const assistantTextSegments = state.assistantTextSegments;
   const toolMetas = state.toolMetas;
   const toolMetaById = state.toolMetaById;
   const toolSummaryById = state.toolSummaryById;
@@ -122,10 +127,20 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.reasoningStreamOpen = false;
     state.suppressBlockChunks = false;
     state.assistantMessageIndex += 1;
+    state.assistantSegmentId = `${params.runId}:assistant:${state.assistantMessageIndex}`;
     state.lastAssistantTextMessageIndex = -1;
     state.lastAssistantTextNormalized = undefined;
     state.lastAssistantTextTrimmed = undefined;
     state.assistantTextBaseline = nextAssistantTextBaseline;
+  };
+
+  const ensureAssistantSegmentId = () => {
+    if (!state.assistantSegmentId) {
+      const nextIndex = Math.max(1, state.assistantMessageIndex);
+      state.assistantMessageIndex = nextIndex;
+      state.assistantSegmentId = `${params.runId}:assistant:${nextIndex}`;
+    }
+    return state.assistantSegmentId;
   };
 
   const rememberAssistantText = (text: string) => {
@@ -157,7 +172,9 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     if (shouldSkipAssistantText(text)) {
       return;
     }
+    const segmentId = ensureAssistantSegmentId();
     assistantTexts.push(text);
+    assistantTextSegments.push({ text, segmentId });
     rememberAssistantText(text);
   };
 
@@ -171,11 +188,17 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     // If we're not streaming block replies, ensure the final payload includes
     // the final text even when interim streaming was enabled.
     if (state.includeReasoning && text && !params.onBlockReply) {
+      const segmentId = ensureAssistantSegmentId();
       if (assistantTexts.length > state.assistantTextBaseline) {
         assistantTexts.splice(
           state.assistantTextBaseline,
           assistantTexts.length - state.assistantTextBaseline,
           text,
+        );
+        assistantTextSegments.splice(
+          state.assistantTextBaseline,
+          assistantTextSegments.length - state.assistantTextBaseline,
+          { text, segmentId },
         );
         rememberAssistantText(text);
       } else {
@@ -489,8 +512,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     }
 
     state.lastBlockReplyText = chunk;
-    assistantTexts.push(chunk);
-    rememberAssistantText(chunk);
+    pushAssistantText(chunk);
     if (!params.onBlockReply) {
       return;
     }
@@ -574,6 +596,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
 
   const resetForCompactionRetry = () => {
     assistantTexts.length = 0;
+    assistantTextSegments.length = 0;
     toolMetas.length = 0;
     toolMetaById.clear();
     toolSummaryById.clear();
@@ -586,6 +609,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     pendingMessagingTargets.clear();
     state.successfulCronAdds = 0;
     state.pendingMessagingMediaUrls.clear();
+    state.assistantSegmentId = undefined;
     resetAssistantMessageState(0);
   };
 
@@ -614,6 +638,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     consumeReplyDirectives,
     consumePartialReplyDirectives,
     resetAssistantMessageState,
+    ensureAssistantSegmentId,
     resetForCompactionRetry,
     finalizeAssistantTexts,
     trimMessagingToolSent,
@@ -664,6 +689,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
 
   return {
     assistantTexts,
+    assistantTextSegments,
     toolMetas,
     unsubscribe,
     isCompacting: () => state.compactionInFlight || state.pendingCompactionRetry > 0,

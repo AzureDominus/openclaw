@@ -945,6 +945,7 @@ export async function runEmbeddedAttempt(
 
       const {
         assistantTexts,
+        assistantTextSegments,
         toolMetas,
         unsubscribe,
         waitForCompactionRetry,
@@ -1377,6 +1378,7 @@ export async function runEmbeddedAttempt(
         systemPromptReport,
         messagesSnapshot,
         assistantTexts,
+        assistantTextSegments: assistantTextSegments.slice(),
         toolMetas: toolMetasNormalized,
         lastAssistant,
         lastToolError: getLastToolError?.(),

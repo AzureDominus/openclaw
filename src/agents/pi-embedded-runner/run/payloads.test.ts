@@ -82,4 +82,16 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
 
     expect(payloads).toHaveLength(0);
   });
+
+  it("attaches assistant segment IDs to assistant payload channel data", () => {
+    const payloads = buildPayloads({
+      assistantTextSegments: [{ text: "Progress update", segmentId: "run-1:assistant:2" }],
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("Progress update");
+    expect(payloads[0]?.channelData).toEqual({
+      openclaw: { assistantSegmentId: "run-1:assistant:2" },
+    });
+  });
 });

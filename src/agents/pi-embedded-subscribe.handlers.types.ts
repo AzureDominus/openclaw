@@ -6,6 +6,7 @@ import type { HookRunner } from "../plugins/hooks.js";
 import type { EmbeddedBlockChunker } from "./pi-embedded-block-chunker.js";
 import type { MessagingToolSend } from "./pi-embedded-messaging.js";
 import type {
+  AssistantTextSegment,
   BlockReplyChunking,
   SubscribeEmbeddedPiSessionParams,
 } from "./pi-embedded-subscribe.types.js";
@@ -32,6 +33,8 @@ export type ToolCallSummary = {
 
 export type EmbeddedPiSubscribeState = {
   assistantTexts: string[];
+  assistantTextSegments: AssistantTextSegment[];
+  assistantSegmentId?: string;
   toolMetas: Array<{ toolName?: string; meta?: string }>;
   toolMetaById: Map<string, ToolCallSummary>;
   toolSummaryById: Set<string>;
@@ -108,6 +111,7 @@ export type EmbeddedPiSubscribeContext = {
     options?: { final?: boolean },
   ) => ReplyDirectiveParseResult | null;
   resetAssistantMessageState: (nextAssistantTextBaseline: number) => void;
+  ensureAssistantSegmentId: () => string;
   resetForCompactionRetry: () => void;
   finalizeAssistantTexts: (args: {
     text: string;

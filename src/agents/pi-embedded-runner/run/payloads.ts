@@ -1,9 +1,10 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
-import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
 import type { ReasoningLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
+import type { OpenClawConfig } from "../../../config/config.js";
+import type { AssistantTextSegment, ToolResultFormat } from "../../pi-embedded-subscribe.js";
+import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { formatToolAggregate } from "../../../auto-reply/tool-meta.js";
-import type { OpenClawConfig } from "../../../config/config.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
   formatAssistantErrorText,
@@ -12,7 +13,6 @@ import {
   isRawApiErrorPayload,
   normalizeTextForComparison,
 } from "../../pi-embedded-helpers.js";
-import type { ToolResultFormat } from "../../pi-embedded-subscribe.js";
 import {
   extractAssistantText,
   extractAssistantThinking,
@@ -89,6 +89,7 @@ function resolveToolErrorWarningPolicy(params: {
 
 export function buildEmbeddedRunPayloads(params: {
   assistantTexts: string[];
+  assistantTextSegments?: AssistantTextSegment[];
   toolMetas: ToolMetaEntry[];
   lastAssistant: AssistantMessage | undefined;
   lastToolError?: LastToolError;
@@ -112,6 +113,11 @@ export function buildEmbeddedRunPayloads(params: {
   audioAsVoice?: boolean;
   replyToTag?: boolean;
   replyToCurrent?: boolean;
+  channelData?: {
+    openclaw?: {
+      assistantSegmentId?: string;
+    };
+  };
 }> {
   const replyItems: Array<{
     text: string;
@@ -122,6 +128,7 @@ export function buildEmbeddedRunPayloads(params: {
     replyToId?: string;
     replyToTag?: boolean;
     replyToCurrent?: boolean;
+    assistantSegmentId?: string;
   }> = [];
 
   const useMarkdown = params.toolResultFormat === "markdown";
@@ -243,16 +250,18 @@ export function buildEmbeddedRunPayloads(params: {
     }
     return isRawApiErrorPayload(trimmed);
   };
-  const answerTexts = (
-    params.assistantTexts.length
-      ? params.assistantTexts
-      : fallbackAnswerText
-        ? [fallbackAnswerText]
-        : []
-  ).filter((text) => !shouldSuppressRawErrorText(text));
+  const answerSegments = (
+    params.assistantTextSegments?.length
+      ? params.assistantTextSegments
+      : params.assistantTexts.length
+        ? params.assistantTexts.map((text) => ({ text, segmentId: undefined }))
+        : fallbackAnswerText
+          ? [{ text: fallbackAnswerText, segmentId: undefined }]
+          : []
+  ).filter((segment) => !shouldSuppressRawErrorText(segment.text));
 
   let hasUserFacingAssistantReply = false;
-  for (const text of answerTexts) {
+  for (const segment of answerSegments) {
     const {
       text: cleanedText,
       mediaUrls,
@@ -260,7 +269,7 @@ export function buildEmbeddedRunPayloads(params: {
       replyToId,
       replyToTag,
       replyToCurrent,
-    } = parseReplyDirectives(text);
+    } = parseReplyDirectives(segment.text);
     if (!cleanedText && (!mediaUrls || mediaUrls.length === 0) && !audioAsVoice) {
       continue;
     }
@@ -271,6 +280,7 @@ export function buildEmbeddedRunPayloads(params: {
       replyToId,
       replyToTag,
       replyToCurrent,
+      assistantSegmentId: segment.segmentId,
     });
     hasUserFacingAssistantReply = true;
   }
@@ -327,6 +337,13 @@ export function buildEmbeddedRunPayloads(params: {
       replyToTag: item.replyToTag,
       replyToCurrent: item.replyToCurrent,
       audioAsVoice: item.audioAsVoice || Boolean(hasAudioAsVoiceTag && item.media?.length),
+      channelData: item.assistantSegmentId
+        ? {
+            openclaw: {
+              assistantSegmentId: item.assistantSegmentId,
+            },
+          }
+        : undefined,
     }))
     .filter((p) => {
       if (!p.text && !p.mediaUrl && (!p.mediaUrls || p.mediaUrls.length === 0)) {

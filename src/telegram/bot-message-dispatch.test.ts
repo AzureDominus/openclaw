@@ -628,14 +628,41 @@ describe("dispatchTelegramMessage draft streaming", () => {
     createTelegramDraftStream.mockReturnValue(draftStream);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
-        await replyOptions?.onPartialReply?.({ text: "Progress update 1" });
+        await replyOptions?.onPartialReply?.({
+          text: "Progress update 1",
+          channelData: { openclaw: { assistantSegmentId: "seg-1" } },
+        });
         await replyOptions?.onToolStart?.({ phase: "start", name: "read" });
-        await replyOptions?.onPartialReply?.({ text: "Progress update 2" });
+        await replyOptions?.onPartialReply?.({
+          text: "Progress update 2",
+          channelData: { openclaw: { assistantSegmentId: "seg-2" } },
+        });
         await replyOptions?.onToolStart?.({ phase: "start", name: "exec" });
-        await replyOptions?.onPartialReply?.({ text: "Final summary" });
-        await dispatcherOptions.deliver({ text: "Progress update 1" }, { kind: "final" });
-        await dispatcherOptions.deliver({ text: "Progress update 2" }, { kind: "final" });
-        await dispatcherOptions.deliver({ text: "Final summary" }, { kind: "final" });
+        await replyOptions?.onPartialReply?.({
+          text: "Final summary",
+          channelData: { openclaw: { assistantSegmentId: "seg-3" } },
+        });
+        await dispatcherOptions.deliver(
+          {
+            text: "Progress update 1 cleaned",
+            channelData: { openclaw: { assistantSegmentId: "seg-1" } },
+          },
+          { kind: "final" },
+        );
+        await dispatcherOptions.deliver(
+          {
+            text: "Progress update 2 cleaned",
+            channelData: { openclaw: { assistantSegmentId: "seg-2" } },
+          },
+          { kind: "final" },
+        );
+        await dispatcherOptions.deliver(
+          {
+            text: "Final summary",
+            channelData: { openclaw: { assistantSegmentId: "seg-3" } },
+          },
+          { kind: "final" },
+        );
         return { queuedFinal: true };
       },
     );
