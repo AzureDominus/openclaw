@@ -322,10 +322,14 @@ export const dispatchTelegramMessage = async ({
     await lane.stream.flush();
   };
 
-  const disableBlockStreaming = !previewStreamingEnabled
-    ? true
-    : forceBlockStreamingForReasoning
+  // Keep block/progress updates enabled when stream mode is off.
+  // `streamMode: off` should disable preview editing, not suppress
+  // user-facing progress checkpoints between tool bursts.
+  const disableBlockStreaming =
+    streamMode === "off"
       ? false
+      : forceBlockStreamingForReasoning
+        ? false
       : typeof telegramCfg.blockStreaming === "boolean"
         ? !telegramCfg.blockStreaming
         : canStreamAnswerDraft
