@@ -167,6 +167,13 @@ export type ExecProcessHandle = {
   kill: () => void;
 };
 
+export function isExecOutputCapTruncated(params: {
+  totalOutputChars: number;
+  outputCapChars: number;
+}) {
+  return params.totalOutputChars > params.outputCapChars;
+}
+
 export function normalizeExecHost(value?: string | null): ExecHost | null {
   const normalized = value?.trim().toLowerCase();
   if (normalized === "sandbox" || normalized === "gateway" || normalized === "node") {
@@ -522,13 +529,17 @@ export async function runExecProcess(opts: {
       if (status === "completed") {
         const exitCode = exit.exitCode ?? 0;
         const exitMsg = exitCode !== 0 ? `\n\n(Command exited with code ${exitCode})` : "";
+        const truncated = isExecOutputCapTruncated({
+          totalOutputChars: session.totalOutputChars,
+          outputCapChars: opts.maxOutput,
+        });
         return {
           status: "completed",
           exitCode,
           exitSignal: exit.exitSignal,
           durationMs,
           aggregated: aggregated + exitMsg,
-          truncated: session.truncated,
+          truncated,
           totalOutputChars: session.totalOutputChars,
           outputCapChars: opts.maxOutput,
           timedOut: false,
@@ -542,13 +553,17 @@ export async function runExecProcess(opts: {
             : exit.exitSignal != null
               ? `Command aborted by signal ${exit.exitSignal}`
               : "Command aborted before exit code was captured";
+      const truncated = isExecOutputCapTruncated({
+        totalOutputChars: session.totalOutputChars,
+        outputCapChars: opts.maxOutput,
+      });
       return {
         status: "failed",
         exitCode: exit.exitCode,
         exitSignal: exit.exitSignal,
         durationMs,
         aggregated,
-        truncated: session.truncated,
+        truncated,
         totalOutputChars: session.totalOutputChars,
         outputCapChars: opts.maxOutput,
         timedOut: exit.timedOut,
@@ -560,13 +575,17 @@ export async function runExecProcess(opts: {
       maybeNotifyOnExit(session, "failed");
       const aggregated = session.aggregated.trim();
       const message = aggregated ? `${aggregated}\n\n${String(err)}` : String(err);
+      const truncated = isExecOutputCapTruncated({
+        totalOutputChars: session.totalOutputChars,
+        outputCapChars: opts.maxOutput,
+      });
       return {
         status: "failed",
         exitCode: null,
         exitSignal: null,
         durationMs: Date.now() - startedAt,
         aggregated,
-        truncated: session.truncated,
+        truncated,
         totalOutputChars: session.totalOutputChars,
         outputCapChars: opts.maxOutput,
         timedOut: false,

@@ -27,6 +27,7 @@ import {
   normalizeExecHost,
   normalizeExecSecurity,
   normalizePathPrepend,
+  isExecOutputCapTruncated,
   renderExecHostLabel,
   resolveApprovalRunningNoticeMs,
   runExecProcess,
@@ -152,11 +153,18 @@ function formatTruncationNotice(params: {
   outputCapChars: number;
   totalOutputChars: number;
 }) {
-  if (!params.truncated) {
+  const wasOutputCapTruncated =
+    params.truncated &&
+    isExecOutputCapTruncated({
+      totalOutputChars: params.totalOutputChars,
+      outputCapChars: params.outputCapChars,
+    });
+  if (!wasOutputCapTruncated) {
     return "";
   }
+  const visibleChars = Math.min(params.outputCapChars, params.totalOutputChars);
   return (
-    `\n\n[exec output truncated: showing last ${params.outputCapChars} chars` +
+    `\n\n[exec output truncated: showing last ${visibleChars} chars` +
     ` of ${params.totalOutputChars} captured]`
   );
 }

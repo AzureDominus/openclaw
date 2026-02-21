@@ -27,6 +27,7 @@ import { logVerbose } from "../../globals.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
+  isInternalMessageChannel,
   isMarkdownCapableMessageChannel,
   resolveMessageChannel,
 } from "../../utils/message-channel.js";
@@ -104,6 +105,11 @@ export async function runAgentTurnWithFallback(params: {
 
   while (true) {
     try {
+      const resolvedMessageChannel = resolveMessageChannel(
+        params.sessionCtx.Surface,
+        params.sessionCtx.Provider,
+      );
+      const stripFailedToolCallDraft = !isInternalMessageChannel(resolvedMessageChannel);
       const normalizeStreamingText = (payload: ReplyPayload): { text?: string; skip: boolean } => {
         let text = payload.text;
         if (!params.isHeartbeat && text?.includes("HEARTBEAT_OK")) {
@@ -131,6 +137,7 @@ export async function runAgentTurnWithFallback(params: {
         }
         const sanitized = sanitizeUserFacingText(text, {
           errorContext: Boolean(payload.isError),
+          stripFailedToolCallDraft,
         });
         if (!sanitized.trim()) {
           return { skip: true };
@@ -514,7 +521,12 @@ export async function runAgentTurnWithFallback(params: {
 
       defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
       const safeMessage = isTransientHttp
-        ? sanitizeUserFacingText(message, { errorContext: true })
+        ? sanitizeUserFacingText(message, {
+            errorContext: true,
+            stripFailedToolCallDraft: !isInternalMessageChannel(
+              resolveMessageChannel(params.sessionCtx.Surface, params.sessionCtx.Provider),
+            ),
+          })
         : message;
       const trimmedMessage = safeMessage.replace(/\.\s*$/, "");
       const fallbackText = isContextOverflow

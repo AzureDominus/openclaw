@@ -203,7 +203,8 @@ function shouldGuardOnEndTurn(stopReason: string | undefined): boolean {
   return stopReason === "stop" || stopReason === "end_turn" || stopReason === "endturn";
 }
 
-const TEXTUAL_TOOL_CALL_RE = /^\s*assistant\s+to=functions\.[a-zA-Z0-9_]+\b/im;
+const TEXTUAL_TOOL_CALL_RE =
+  /(?:[+#]{4,}\s*)?assistant\s+to=(?:functions\.[a-zA-Z0-9_]+|multi_tool_use\.parallel)\b/im;
 
 function hasLikelyTextualToolCall(params: {
   assistantTexts: string[];
@@ -1163,6 +1164,17 @@ export async function runEmbeddedPiAgent(
             shouldGuardOnEndTurn(modelStopReason) &&
             hasTextualToolCallOutput &&
             continueGuardRetries < continueGuardMaxRetries;
+          const reachedContinueGuardRetryCap =
+            !aborted &&
+            !timedOut &&
+            Boolean(lastAssistant) &&
+            shouldGuardOnEndTurn(modelStopReason) &&
+            !declaredStopReason &&
+            continueGuardMaxRetries > 0 &&
+            continueGuardRetries >= continueGuardMaxRetries;
+          const continueGuardMaxAttemptsNotice = reachedContinueGuardRetryCap
+            ? `Continue guard reached MAX_ATTEMPTS (${continueGuardMaxRetries}): the bot did not acknowledge completion (missing OPENCLAW_STOP_REASON). Returning the latest response as-is.`
+            : undefined;
           if (shouldRetryForMissingStopReason || shouldRetryForTextualToolCallOutput) {
             const candidatePayloads = buildEmbeddedRunPayloads({
               assistantTexts: attempt.assistantTexts ?? [],
@@ -1253,6 +1265,9 @@ export async function runEmbeddedPiAgent(
           }
           if (shouldSurfaceContinueGuardNotice && continueGuardNotices.length > 0) {
             payloads = [...continueGuardNotices.map((text) => ({ text })), ...payloads];
+          }
+          if (continueGuardMaxAttemptsNotice) {
+            payloads = [{ text: continueGuardMaxAttemptsNotice }, ...payloads];
           }
 
           // Timeout aborts can leave the run without any assistant payloads.
