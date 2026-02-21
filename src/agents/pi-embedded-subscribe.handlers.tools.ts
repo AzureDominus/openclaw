@@ -1,13 +1,13 @@
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
-import { emitAgentEvent } from "../infra/agent-events.js";
-import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
-import { normalizeTextForComparison } from "./pi-embedded-helpers.js";
-import { isMessagingTool, isMessagingToolSendAction } from "./pi-embedded-messaging.js";
 import type {
   ToolCallSummary,
   ToolHandlerContext,
 } from "./pi-embedded-subscribe.handlers.types.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { normalizeTextForComparison } from "./pi-embedded-helpers.js";
+import { isMessagingTool, isMessagingToolSendAction } from "./pi-embedded-messaging.js";
 import {
   extractMessagingToolSend,
   extractToolErrorMessage,
@@ -381,7 +381,16 @@ export async function handleToolExecutionEnd(
   // Deliver media from tool results when the verbose emitToolOutput path is off.
   // When shouldEmitToolOutput() is true, emitToolOutput already delivers media
   // via parseReplyDirectives (MEDIA: text extraction), so skip to avoid duplicates.
-  if (ctx.params.onToolResult && !isToolError && !ctx.shouldEmitToolOutput()) {
+  //
+  // Browser tool screenshots are intentionally excluded from this auto-delivery path.
+  // The model should explicitly send screenshots via message.send, otherwise users can
+  // receive the same image twice (once uncaptured from tool output + once captioned).
+  if (
+    ctx.params.onToolResult &&
+    !isToolError &&
+    !ctx.shouldEmitToolOutput() &&
+    toolName !== "browser"
+  ) {
     const mediaPaths = filterToolResultMediaUrls(toolName, extractToolResultMediaPaths(result));
     if (mediaPaths.length > 0) {
       try {
