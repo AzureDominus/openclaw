@@ -1,17 +1,31 @@
 import type { ReplyPayload } from "../../../auto-reply/types.js";
 import type { OutboundSendDeps } from "../../../infra/outbound/deliver.js";
 import type { TelegramInlineButtons } from "../../../telegram/button-types.js";
+import type { ChannelOutboundAdapter } from "../types.js";
 import { markdownToTelegramHtmlChunks } from "../../../telegram/format.js";
 import {
   parseTelegramReplyToMessageId,
   parseTelegramThreadId,
 } from "../../../telegram/outbound-params.js";
 import { sendMessageTelegram } from "../../../telegram/send.js";
-import type { ChannelOutboundAdapter } from "../types.js";
 import { resolvePayloadMediaUrls, sendPayloadMediaSequence } from "./direct-text-media.js";
+import { resolveChannelMediaMaxBytes } from "../media-limits.js";
 
 type TelegramSendFn = typeof sendMessageTelegram;
 type TelegramSendOpts = Parameters<TelegramSendFn>[2];
+
+function resolveTelegramMaxBytes(params: {
+  cfg: Parameters<typeof resolveChannelMediaMaxBytes>[0]["cfg"];
+  accountId?: string | null;
+}) {
+  return resolveChannelMediaMaxBytes({
+    cfg: params.cfg,
+    resolveChannelLimitMb: ({ cfg, accountId }) =>
+      cfg.channels?.telegram?.accounts?.[accountId]?.mediaMaxMb ??
+      cfg.channels?.telegram?.mediaMaxMb,
+    accountId: params.accountId,
+  });
+}
 
 function resolveTelegramSendContext(params: {
   cfg: NonNullable<TelegramSendOpts>["cfg"];
@@ -119,9 +133,11 @@ export const telegramOutbound: ChannelOutboundAdapter = {
       replyToId,
       threadId,
     });
+    const maxBytes = resolveTelegramMaxBytes({ cfg, accountId });
     const result = await send(to, text, {
       ...baseOpts,
       mediaUrl,
+      maxBytes,
       mediaLocalRoots,
     });
     return { channel: "telegram", ...result };
@@ -143,12 +159,14 @@ export const telegramOutbound: ChannelOutboundAdapter = {
       replyToId,
       threadId,
     });
+    const maxBytes = resolveTelegramMaxBytes({ cfg, accountId });
     const result = await sendTelegramPayloadMessages({
       send,
       to,
       payload,
       baseOpts: {
         ...baseOpts,
+        maxBytes,
         mediaLocalRoots,
       },
     });
