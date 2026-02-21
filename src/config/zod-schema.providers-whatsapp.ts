@@ -48,6 +48,15 @@ const WhatsAppAckReactionSchema = z
   .strict()
   .optional();
 
+const WhatsAppImageAutoDocumentSchema = z
+  .object({
+    maxBytes: z.number().int().nonnegative().optional(),
+    browserMaxSide: z.number().int().nonnegative().optional(),
+    browserMaxPixels: z.number().int().nonnegative().optional(),
+  })
+  .strict()
+  .optional();
+
 function buildWhatsAppCommonShape(params: { useDefaults: boolean }) {
   return {
     enabled: z.boolean().optional(),
@@ -75,6 +84,7 @@ function buildWhatsAppCommonShape(params: { useDefaults: boolean }) {
     chunkMode: z.enum(["length", "newline"]).optional(),
     mediaMaxMb: z.number().int().positive().optional(),
     imageUploadMode: z.enum(["image", "document", "auto"]).optional(),
+    imageAutoDocument: WhatsAppImageAutoDocumentSchema,
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     groups: WhatsAppGroupsSchema,

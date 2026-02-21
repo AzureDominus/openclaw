@@ -32,6 +32,18 @@ export function mergeTelegramAccountConfig(
   const configuredAccountIds = Object.keys(cfg.channels?.telegram?.accounts ?? {});
   const isMultiAccount = configuredAccountIds.length > 1;
   const groups = account.groups ?? (isMultiAccount ? undefined : channelGroups);
+  const mergedImageAutoDocument =
+    base.imageAutoDocument || account.imageAutoDocument
+      ? {
+          ...base.imageAutoDocument,
+          ...account.imageAutoDocument,
+        }
+      : undefined;
 
-  return { ...base, ...account, groups };
+  return {
+    ...base,
+    ...account,
+    groups,
+    ...(mergedImageAutoDocument ? { imageAutoDocument: mergedImageAutoDocument } : {}),
+  };
 }

@@ -1661,6 +1661,26 @@ export const FIELD_HELP: Record<string, string> = {
     "Debounce window (ms) for batching rapid inbound messages from the same sender (0 to disable).",
   "channels.telegram.imageUploadMode":
     'How Telegram sends outbound images: "photo" (default photo pipeline), "document" (max fidelity), or "auto" (uses document for oversized/browser screenshot images).',
+  "channels.telegram.imageAutoDocument":
+    "Auto-mode Telegram image thresholds for sending images as documents instead of photos.",
+  "channels.telegram.imageAutoDocument.maxBytes":
+    "Send Telegram auto-mode images as documents when bytes exceed this value. Set 0 to disable this threshold.",
+  "channels.telegram.imageAutoDocument.maxDimensionSum":
+    "Send Telegram auto-mode images as documents when width plus height exceeds this value. Set 0 to disable this threshold.",
+  "channels.telegram.imageAutoDocument.maxAspectRatio":
+    "Send Telegram auto-mode images as documents when aspect ratio exceeds this value. Set 0 to disable this threshold.",
+  "channels.telegram.imageAutoDocument.browserMaxSide":
+    "For browser screenshots in Telegram auto mode, send as documents when max side exceeds this value. Set 0 to disable this threshold.",
+  "channels.telegram.imageAutoDocument.browserMaxPixels":
+    "For browser screenshots in Telegram auto mode, send as documents when total pixels exceed this value. Set 0 to disable this threshold.",
   "channels.whatsapp.imageUploadMode":
     'How WhatsApp sends outbound images: "image", "document", or "auto" (sends browser screenshots as documents).',
+  "channels.whatsapp.imageAutoDocument":
+    "Auto-mode WhatsApp browser screenshot thresholds for sending images as documents.",
+  "channels.whatsapp.imageAutoDocument.maxBytes":
+    "Send WhatsApp browser screenshots as documents when bytes exceed this value. Set 0 to disable this threshold.",
+  "channels.whatsapp.imageAutoDocument.browserMaxSide":
+    "Send WhatsApp browser screenshots as documents when max side exceeds this value. Set 0 to disable this threshold.",
+  "channels.whatsapp.imageAutoDocument.browserMaxPixels":
+    "Send WhatsApp browser screenshots as documents when total pixels exceed this value. Set 0 to disable this threshold.",
 };

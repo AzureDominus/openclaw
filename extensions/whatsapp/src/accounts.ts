@@ -38,6 +38,8 @@ export type ResolvedWhatsAppAccount = {
   textChunkLimit?: number;
   chunkMode?: "length" | "newline";
   mediaMaxMb?: number;
+  imageUploadMode?: "image" | "document" | "auto";
+  imageAutoDocument?: WhatsAppAccountConfig["imageAutoDocument"];
   blockStreaming?: boolean;
   ackReaction?: WhatsAppAccountConfig["ackReaction"];
   reactionLevel?: WhatsAppAccountConfig["reactionLevel"];
@@ -127,6 +129,18 @@ export function resolveWhatsAppAccount(params: {
   });
   const accountId = merged.accountId;
   const enabled = merged.enabled !== false;
+  const rootCfg = params.cfg.channels?.whatsapp;
+  const accountCfg = resolveMergedWhatsAppAccountConfig({
+    cfg: params.cfg,
+    accountId,
+  });
+  const imageAutoDocument =
+    rootCfg?.imageAutoDocument || accountCfg?.imageAutoDocument
+      ? {
+          ...rootCfg?.imageAutoDocument,
+          ...accountCfg?.imageAutoDocument,
+        }
+      : undefined;
   const { authDir, isLegacy } = resolveWhatsAppAuthDir({
     cfg: params.cfg,
     accountId,
@@ -150,6 +164,7 @@ export function resolveWhatsAppAccount(params: {
     chunkMode: merged.chunkMode,
     mediaMaxMb: merged.mediaMaxMb,
     imageUploadMode: merged.imageUploadMode,
+    imageAutoDocument,
     blockStreaming: merged.blockStreaming,
     ackReaction: merged.ackReaction,
     reactionLevel: merged.reactionLevel,

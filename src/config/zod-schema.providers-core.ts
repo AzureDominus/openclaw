@@ -71,6 +71,16 @@ const TelegramCapabilitiesSchema = z.union([
     })
     .strict(),
 ]);
+const TelegramImageAutoDocumentSchema = z
+  .object({
+    maxBytes: z.number().int().nonnegative().optional(),
+    maxDimensionSum: z.number().int().nonnegative().optional(),
+    maxAspectRatio: z.number().positive().optional(),
+    browserMaxSide: z.number().int().nonnegative().optional(),
+    browserMaxPixels: z.number().int().nonnegative().optional(),
+  })
+  .strict()
+  .optional();
 const TextChunkModeSchema = z.enum(["length", "newline"]);
 const UnifiedStreamingModeSchema = z.enum(["off", "partial", "block", "progress"]);
 const ChannelStreamingBlockSchema = z
@@ -241,6 +251,7 @@ export const TelegramAccountSchemaBase = z
     streaming: ChannelPreviewStreamingConfigSchema.optional(),
     mediaMaxMb: z.number().positive().optional(),
     imageUploadMode: z.enum(["photo", "document", "auto"]).optional(),
+    imageAutoDocument: TelegramImageAutoDocumentSchema,
     timeoutSeconds: z.number().int().positive().optional(),
     pollingStallThresholdMs: z.number().int().min(30_000).max(600_000).optional(),
     retry: RetryConfigSchema,

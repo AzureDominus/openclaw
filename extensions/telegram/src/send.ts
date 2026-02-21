@@ -196,6 +196,42 @@ export function resetTelegramClientOptionsCacheForTests(): void {
   telegramClientOptionsCache.clear();
 }
 
+type TelegramImageAutoDocumentPolicy = {
+  maxBytes: number;
+  maxDimensionSum: number;
+  maxAspectRatio: number;
+  browserMaxSide: number;
+  browserMaxPixels: number;
+};
+
+function resolveTelegramImageAutoDocumentPolicy(params: {
+  config?: ResolvedTelegramAccount["config"];
+}): TelegramImageAutoDocumentPolicy {
+  const auto = params.config?.imageAutoDocument;
+  return {
+    maxBytes:
+      typeof auto?.maxBytes === "number" && Number.isFinite(auto.maxBytes)
+        ? Math.max(0, Math.floor(auto.maxBytes))
+        : TELEGRAM_PHOTO_MAX_BYTES,
+    maxDimensionSum:
+      typeof auto?.maxDimensionSum === "number" && Number.isFinite(auto.maxDimensionSum)
+        ? Math.max(0, Math.floor(auto.maxDimensionSum))
+        : MAX_TELEGRAM_PHOTO_DIMENSION_SUM,
+    maxAspectRatio:
+      typeof auto?.maxAspectRatio === "number" && Number.isFinite(auto.maxAspectRatio)
+        ? Math.max(0, auto.maxAspectRatio)
+        : MAX_TELEGRAM_PHOTO_ASPECT_RATIO,
+    browserMaxSide:
+      typeof auto?.browserMaxSide === "number" && Number.isFinite(auto.browserMaxSide)
+        ? Math.max(0, Math.floor(auto.browserMaxSide))
+        : TELEGRAM_BROWSER_SCREENSHOT_DOC_MAX_SIDE,
+    browserMaxPixels:
+      typeof auto?.browserMaxPixels === "number" && Number.isFinite(auto.browserMaxPixels)
+        ? Math.max(0, Math.floor(auto.browserMaxPixels))
+        : TELEGRAM_BROWSER_SCREENSHOT_DOC_MAX_PIXELS,
+  };
+}
+
 function createTelegramHttpLogger(cfg: OpenClawConfig) {
   const enabled = isDiagnosticFlagEnabled("telegram.http", cfg);
   if (!enabled) {
@@ -748,6 +784,7 @@ export async function sendMessageTelegram(
     buffer: Buffer;
     mediaUrl?: string;
     mode?: "photo" | "auto" | "document";
+    policy: TelegramImageAutoDocumentPolicy;
   }): Promise<boolean> {
     const mode = params.mode ?? "auto";
     if (mode === "document") {
@@ -756,7 +793,7 @@ export async function sendMessageTelegram(
     if (mode === "photo") {
       return true;
     }
-    if (params.buffer.byteLength > TELEGRAM_PHOTO_MAX_BYTES) {
+    if (params.policy.maxBytes > 0 && params.buffer.byteLength > params.policy.maxBytes) {
       sendLogger.warn("Photo exceeds Telegram photo size limit. Sending as document instead.");
       return false;
     }
@@ -773,8 +810,8 @@ export async function sendMessageTelegram(
         const maxSide = Math.max(width, height);
         const pixels = width * height;
         if (
-          maxSide > TELEGRAM_BROWSER_SCREENSHOT_DOC_MAX_SIDE ||
-          pixels > TELEGRAM_BROWSER_SCREENSHOT_DOC_MAX_PIXELS
+          (params.policy.browserMaxSide > 0 && maxSide > params.policy.browserMaxSide) ||
+          (params.policy.browserMaxPixels > 0 && pixels > params.policy.browserMaxPixels)
         ) {
           sendLogger.warn(
             `Browser screenshot dimensions (${width}x${height}) are large. Sending as document instead.`,
@@ -786,9 +823,10 @@ export async function sendMessageTelegram(
       const shorterSide = Math.min(width, height);
       const longerSide = Math.max(width, height);
       const isValidPhoto =
-        width + height <= MAX_TELEGRAM_PHOTO_DIMENSION_SUM &&
+        (params.policy.maxDimensionSum <= 0 || width + height <= params.policy.maxDimensionSum) &&
         shorterSide > 0 &&
-        longerSide <= shorterSide * MAX_TELEGRAM_PHOTO_ASPECT_RATIO;
+        (params.policy.maxAspectRatio <= 0 ||
+          longerSide <= shorterSide * params.policy.maxAspectRatio);
 
       if (!isValidPhoto) {
         sendLogger.warn(
@@ -823,11 +861,15 @@ export async function sendMessageTelegram(
 
     // Validate photo dimensions before attempting sendPhoto
     let sendImageAsPhoto = true;
+    const imageAutoDocumentPolicy = resolveTelegramImageAutoDocumentPolicy({
+      config: account.config,
+    });
     if (kind === "image" && !isGif && !opts.forceDocument) {
       sendImageAsPhoto = await shouldSendTelegramImageAsPhoto({
         buffer: media.buffer,
         mediaUrl,
         mode: account.config.imageUploadMode,
+        policy: imageAutoDocumentPolicy,
       });
     }
     const isVideoNote = kind === "video" && opts.asVideoNote === true;

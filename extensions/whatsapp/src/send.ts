@@ -6,7 +6,10 @@ import {
   convertMarkdownTables,
   resolveMarkdownTableMode,
 } from "openclaw/plugin-sdk/markdown-table-runtime";
-import { isLikelyBrowserScreenshotMediaUrl } from "openclaw/plugin-sdk/media-runtime";
+import {
+  getImageMetadata,
+  isLikelyBrowserScreenshotMediaUrl,
+} from "openclaw/plugin-sdk/media-runtime";
 import { normalizePollInput, type PollInput } from "openclaw/plugin-sdk/poll-runtime";
 import { createSubsystemLogger, getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -25,13 +28,40 @@ import { loadOutboundMediaFromUrl } from "./outbound-media.runtime.js";
 import { markdownToWhatsApp, toWhatsappJid } from "./text-runtime.js";
 
 const outboundLog = createSubsystemLogger("gateway/channels/whatsapp").child("outbound");
-const WHATSAPP_OVERSIZE_DOC_MAX_BYTES = 5 * 1024 * 1024;
+const WHATSAPP_AUTO_DOC_DEFAULT_MAX_BYTES = 20 * 1024 * 1024;
 
-function shouldSendWhatsAppImageAsDocument(params: {
+type WhatsAppImageAutoDocumentPolicy = {
+  maxBytes: number;
+  browserMaxSide: number;
+  browserMaxPixels: number;
+};
+
+function resolveWhatsAppImageAutoDocumentPolicy(params: {
+  account: ReturnType<typeof resolveWhatsAppAccount>;
+}): WhatsAppImageAutoDocumentPolicy {
+  const auto = params.account.imageAutoDocument;
+  return {
+    maxBytes:
+      typeof auto?.maxBytes === "number" && Number.isFinite(auto.maxBytes)
+        ? Math.max(0, Math.floor(auto.maxBytes))
+        : WHATSAPP_AUTO_DOC_DEFAULT_MAX_BYTES,
+    browserMaxSide:
+      typeof auto?.browserMaxSide === "number" && Number.isFinite(auto.browserMaxSide)
+        ? Math.max(0, Math.floor(auto.browserMaxSide))
+        : 0,
+    browserMaxPixels:
+      typeof auto?.browserMaxPixels === "number" && Number.isFinite(auto.browserMaxPixels)
+        ? Math.max(0, Math.floor(auto.browserMaxPixels))
+        : 0,
+  };
+}
+
+async function shouldSendWhatsAppImageAsDocument(params: {
   mode?: "image" | "document" | "auto";
   mediaUrl?: string;
   buffer: Buffer;
-}): boolean {
+  policy: WhatsAppImageAutoDocumentPolicy;
+}): Promise<boolean> {
   const mode = params.mode ?? "image";
   if (mode === "document") {
     return true;
@@ -39,10 +69,27 @@ function shouldSendWhatsAppImageAsDocument(params: {
   if (mode === "image") {
     return false;
   }
-  return (
-    isLikelyBrowserScreenshotMediaUrl(params.mediaUrl) &&
-    params.buffer.byteLength > WHATSAPP_OVERSIZE_DOC_MAX_BYTES
-  );
+  if (!isLikelyBrowserScreenshotMediaUrl(params.mediaUrl)) {
+    return false;
+  }
+  if (params.policy.maxBytes > 0 && params.buffer.byteLength > params.policy.maxBytes) {
+    return true;
+  }
+  if (params.policy.browserMaxSide <= 0 && params.policy.browserMaxPixels <= 0) {
+    return false;
+  }
+  const meta = await getImageMetadata(params.buffer).catch(() => null);
+  const width = Number(meta?.width ?? 0);
+  const height = Number(meta?.height ?? 0);
+  if (width <= 0 || height <= 0) {
+    return false;
+  }
+  const maxSide = Math.max(width, height);
+  const pixels = width * height;
+  if (params.policy.browserMaxSide > 0 && maxSide > params.policy.browserMaxSide) {
+    return true;
+  }
+  return params.policy.browserMaxPixels > 0 && pixels > params.policy.browserMaxPixels;
 }
 
 function resolveOutboundWhatsAppAccountId(params: {
@@ -117,6 +164,7 @@ export async function sendMessageWhatsApp(
     cfg,
     accountId: resolvedAccountId ?? options.accountId,
   });
+  const imageAutoDocumentPolicy = resolveWhatsAppImageAutoDocumentPolicy({ account });
   const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "whatsapp",
@@ -158,10 +206,11 @@ export async function sendMessageWhatsApp(
         documentFileName = media.fileName;
       } else if (media.kind === "image") {
         text = caption ?? "";
-        sendImageAsDocument = shouldSendWhatsAppImageAsDocument({
+        sendImageAsDocument = await shouldSendWhatsAppImageAsDocument({
           mode: account.imageUploadMode,
           mediaUrl: primaryMediaUrl,
           buffer: media.buffer,
+          policy: imageAutoDocumentPolicy,
         });
         if (sendImageAsDocument) {
           documentFileName = media.fileName;

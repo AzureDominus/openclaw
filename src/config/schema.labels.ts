@@ -887,5 +887,21 @@ export const FIELD_LABELS: Record<string, string> = {
   "plugins.entries.*.env": "Plugin Environment Variables",
   "plugins.entries.*.config": "Plugin Config",
   "channels.telegram.imageUploadMode": "Telegram Image Upload Mode",
+  "channels.telegram.imageAutoDocument": "Telegram Image Auto Document",
+  "channels.telegram.imageAutoDocument.maxBytes": "Telegram Image Auto Document Max Bytes",
+  "channels.telegram.imageAutoDocument.maxDimensionSum":
+    "Telegram Image Auto Document Max Dimension Sum",
+  "channels.telegram.imageAutoDocument.maxAspectRatio":
+    "Telegram Image Auto Document Max Aspect Ratio",
+  "channels.telegram.imageAutoDocument.browserMaxSide":
+    "Telegram Browser Screenshot Document Max Side",
+  "channels.telegram.imageAutoDocument.browserMaxPixels":
+    "Telegram Browser Screenshot Document Max Pixels",
   "channels.whatsapp.imageUploadMode": "WhatsApp Image Upload Mode",
+  "channels.whatsapp.imageAutoDocument": "WhatsApp Image Auto Document",
+  "channels.whatsapp.imageAutoDocument.maxBytes": "WhatsApp Image Auto Document Max Bytes",
+  "channels.whatsapp.imageAutoDocument.browserMaxSide":
+    "WhatsApp Browser Screenshot Document Max Side",
+  "channels.whatsapp.imageAutoDocument.browserMaxPixels":
+    "WhatsApp Browser Screenshot Document Max Pixels",
 };
