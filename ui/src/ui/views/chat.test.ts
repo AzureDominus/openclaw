@@ -224,4 +224,50 @@ describe("chat view", () => {
     expect(onNewSession).toHaveBeenCalledTimes(1);
     expect(container.textContent).not.toContain("Stop");
   });
+
+  it("shows associated tool output in sidebar when thinking/output rows are hidden", () => {
+    const container = document.createElement("div");
+    const onOpenSidebar = vi.fn();
+    render(
+      renderChat(
+        createProps({
+          showThinking: false,
+          onOpenSidebar,
+          messages: [
+            {
+              role: "assistant",
+              timestamp: 1,
+              content: [
+                {
+                  type: "toolcall",
+                  id: "call-1",
+                  name: "browser",
+                  arguments: { action: "snapshot" },
+                },
+              ],
+            },
+            {
+              role: "toolresult",
+              timestamp: 2,
+              toolCallId: "call-1",
+              toolName: "browser",
+              content: "snapshot complete",
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    const toolCard = container.querySelector(".chat-tool-card");
+    expect(toolCard).not.toBeNull();
+    toolCard?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(onOpenSidebar).toHaveBeenCalledTimes(1);
+    const details = String(onOpenSidebar.mock.calls[0]?.[0] ?? "");
+    expect(details).toContain('"type": "tool_call"');
+    expect(details).toContain('"name": "browser"');
+    expect(details).toContain("snapshot complete");
+    expect(details).not.toContain("No output returned by the tool.");
+  });
 });

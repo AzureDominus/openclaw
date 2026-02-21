@@ -18,7 +18,42 @@ type PendingToolCall = {
   consumed: boolean;
 };
 
-export function extractToolCards(message: unknown): ToolCard[] {
+export type ToolResultLookup = {
+  byCallId: Map<string, ToolCard>;
+  byName: Map<string, ToolCard[]>;
+};
+
+export function buildToolResultLookup(messages: unknown[]): ToolResultLookup {
+  const byCallId = new Map<string, ToolCard>();
+  const byName = new Map<string, ToolCard[]>();
+
+  for (const message of messages) {
+    const cards = extractToolCards(message);
+    for (const card of cards) {
+      if (card.kind !== "result") {
+        continue;
+      }
+      if (card.callId) {
+        byCallId.set(card.callId, card);
+      }
+      const bucket = byName.get(card.name);
+      if (bucket) {
+        bucket.push(card);
+      } else {
+        byName.set(card.name, [card]);
+      }
+    }
+  }
+
+  return { byCallId, byName };
+}
+
+export function extractToolCards(
+  message: unknown,
+  opts?: {
+    toolResultLookup?: ToolResultLookup;
+  },
+): ToolCard[] {
   const m = message as Record<string, unknown>;
   const content = normalizeContent(m.content);
   const cards: ToolCard[] = [];
@@ -31,17 +66,21 @@ export function extractToolCards(message: unknown): ToolCard[] {
       (typeof item.name === "string" && item.arguments != null);
     if (isToolCall) {
       const name = (item.name as string) ?? "tool";
+      const callId = extractToolCallId(item);
       const args = coerceArgs(item.arguments ?? item.args);
       pendingCalls.push({
-        id: extractToolCallId(item),
+        id: callId,
         name,
         args,
         consumed: false,
       });
+      const lookupResult = resolveToolResultFromLookup(opts?.toolResultLookup, name, callId);
       cards.push({
         kind: "call",
         name,
+        callId,
         args,
+        sidebarText: lookupResult?.text,
       });
     }
   }
@@ -55,7 +94,7 @@ export function extractToolCards(message: unknown): ToolCard[] {
     const name = typeof item.name === "string" ? item.name : "tool";
     const callId = extractToolCallId(item);
     const matchedCall = resolveMatchingCall(pendingCalls, name, callId);
-    cards.push({ kind: "result", name, args: matchedCall?.args, text });
+    cards.push({ kind: "result", name, callId, args: matchedCall?.args, text });
   }
 
   if (isToolResultMessage(message) && !cards.some((card) => card.kind === "result")) {
@@ -63,11 +102,12 @@ export function extractToolCards(message: unknown): ToolCard[] {
       (typeof m.toolName === "string" && m.toolName) ||
       (typeof m.tool_name === "string" && m.tool_name) ||
       "tool";
+    const callId = extractToolCallId(m);
     const fallbackArgs = coerceArgs(
       m.toolArgs ?? m.tool_args ?? m.args ?? m.arguments ?? m.input ?? m.toolInput ?? m.tool_input,
     );
     const text = extractTextCached(message) ?? undefined;
-    cards.push({ kind: "result", name, args: fallbackArgs, text });
+    cards.push({ kind: "result", name, callId, args: fallbackArgs, text });
   }
 
   return cards;
@@ -76,7 +116,9 @@ export function extractToolCards(message: unknown): ToolCard[] {
 export function renderToolCardSidebar(card: ToolCard, onOpenSidebar?: (content: string) => void) {
   const display = resolveToolDisplay({ name: card.name, args: card.args });
   const detail = formatToolDetail(display);
+  const sidebarText = card.sidebarText?.trim() ? card.sidebarText : card.text;
   const hasText = Boolean(card.text?.trim());
+  const hasSidebarText = Boolean(sidebarText?.trim());
 
   const canClick = Boolean(onOpenSidebar);
   const handleClick = canClick
@@ -86,7 +128,9 @@ export function renderToolCardSidebar(card: ToolCard, onOpenSidebar?: (content: 
           "### Tool Call",
           formatToolCallForSidebar(card.name, card.args),
           "### Tool Output",
-          hasText ? formatToolOutputForSidebar(card.text!) : "_No output returned by the tool._",
+          hasSidebarText
+            ? formatToolOutputForSidebar(sidebarText!)
+            : "_No output returned by the tool._",
         ];
         onOpenSidebar!(sections.join("\n\n"));
       }
@@ -192,6 +236,27 @@ function resolveMatchingCall(
     return nextByName;
   }
   return pendingCalls.find((entry) => entry.name === name);
+}
+
+function resolveToolResultFromLookup(
+  lookup: ToolResultLookup | undefined,
+  name: string,
+  callId: string | null,
+): ToolCard | undefined {
+  if (!lookup) {
+    return undefined;
+  }
+  if (callId) {
+    const byId = lookup.byCallId.get(callId);
+    if (byId) {
+      return byId;
+    }
+  }
+  const byName = lookup.byName.get(name);
+  if (!byName || byName.length === 0) {
+    return undefined;
+  }
+  return byName.find((entry) => Boolean(entry.text?.trim())) ?? byName[0];
 }
 
 function stringifyToolValue(value: unknown): string | undefined {
