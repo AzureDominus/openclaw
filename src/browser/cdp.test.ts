@@ -3,7 +3,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { type WebSocket, WebSocketServer } from "ws";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { rawDataToString } from "../infra/ws.js";
-import { createTargetViaCdp, evaluateJavaScript, normalizeCdpWsUrl, snapshotAria } from "./cdp.js";
+import {
+  captureScreenshot,
+  createTargetViaCdp,
+  evaluateJavaScript,
+  normalizeCdpWsUrl,
+  snapshotAria,
+} from "./cdp.js";
 import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
 
 describe("cdp", () => {
@@ -227,6 +233,97 @@ describe("cdp", () => {
     expect(snap.nodes[1]?.name).toBe("OK");
     expect(snap.nodes[1]?.backendDOMNodeId).toBe(42);
     expect(snap.nodes[1]?.depth).toBe(1);
+  });
+
+  it("captures viewport screenshot without beyond-viewport capture by default", async () => {
+    let sawLayoutMetrics = false;
+    let captureParams: Record<string, unknown> | undefined;
+    const payload = Buffer.from("viewport", "utf8");
+
+    const wsPort = await startWsServerWithMessages((msg, socket) => {
+      if (msg.method === "Page.enable") {
+        socket.send(JSON.stringify({ id: msg.id, result: {} }));
+        return;
+      }
+      if (msg.method === "Page.getLayoutMetrics") {
+        sawLayoutMetrics = true;
+        socket.send(
+          JSON.stringify({
+            id: msg.id,
+            result: { cssContentSize: { width: 1000, height: 2000 } },
+          }),
+        );
+        return;
+      }
+      if (msg.method === "Page.captureScreenshot") {
+        captureParams = msg.params;
+        socket.send(
+          JSON.stringify({
+            id: msg.id,
+            result: { data: payload.toString("base64") },
+          }),
+        );
+      }
+    });
+
+    const out = await captureScreenshot({
+      wsUrl: `ws://127.0.0.1:${wsPort}`,
+    });
+
+    expect(out.equals(payload)).toBe(true);
+    expect(sawLayoutMetrics).toBe(false);
+    expect(captureParams).toMatchObject({
+      format: "png",
+      fromSurface: true,
+      captureBeyondViewport: false,
+    });
+    expect(captureParams).not.toHaveProperty("clip");
+  });
+
+  it("captures full-page screenshot with beyond-viewport capture and clip", async () => {
+    let sawLayoutMetrics = false;
+    let captureParams: Record<string, unknown> | undefined;
+    const payload = Buffer.from("fullpage", "utf8");
+
+    const wsPort = await startWsServerWithMessages((msg, socket) => {
+      if (msg.method === "Page.enable") {
+        socket.send(JSON.stringify({ id: msg.id, result: {} }));
+        return;
+      }
+      if (msg.method === "Page.getLayoutMetrics") {
+        sawLayoutMetrics = true;
+        socket.send(
+          JSON.stringify({
+            id: msg.id,
+            result: { cssContentSize: { width: 1265, height: 8819 } },
+          }),
+        );
+        return;
+      }
+      if (msg.method === "Page.captureScreenshot") {
+        captureParams = msg.params;
+        socket.send(
+          JSON.stringify({
+            id: msg.id,
+            result: { data: payload.toString("base64") },
+          }),
+        );
+      }
+    });
+
+    const out = await captureScreenshot({
+      wsUrl: `ws://127.0.0.1:${wsPort}`,
+      fullPage: true,
+    });
+
+    expect(out.equals(payload)).toBe(true);
+    expect(sawLayoutMetrics).toBe(true);
+    expect(captureParams).toMatchObject({
+      format: "png",
+      fromSurface: true,
+      captureBeyondViewport: true,
+      clip: { x: 0, y: 0, width: 1265, height: 8819, scale: 1 },
+    });
   });
 
   it("normalizes loopback websocket URLs for remote CDP hosts", () => {
