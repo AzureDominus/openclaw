@@ -1,9 +1,23 @@
+import type { ChannelOutboundAdapter } from "../types.js";
 import { chunkText } from "../../../auto-reply/chunk.js";
 import { shouldLogVerbose } from "../../../globals.js";
 import { sendPollWhatsApp } from "../../../web/outbound.js";
 import { resolveWhatsAppOutboundTarget } from "../../../whatsapp/resolve-outbound-target.js";
-import type { ChannelOutboundAdapter } from "../types.js";
 import { sendTextMediaPayload } from "./direct-text-media.js";
+import { resolveChannelMediaMaxBytes } from "../media-limits.js";
+
+function resolveWhatsAppMaxBytes(params: {
+  cfg: Parameters<typeof resolveChannelMediaMaxBytes>[0]["cfg"];
+  accountId?: string | null;
+}) {
+  return resolveChannelMediaMaxBytes({
+    cfg: params.cfg,
+    resolveChannelLimitMb: ({ cfg, accountId }) =>
+      cfg.channels?.whatsapp?.accounts?.[accountId]?.mediaMaxMb ??
+      cfg.channels?.whatsapp?.mediaMaxMb,
+    accountId: params.accountId,
+  });
+}
 
 export const whatsappOutbound: ChannelOutboundAdapter = {
   deliveryMode: "gateway",
@@ -18,17 +32,20 @@ export const whatsappOutbound: ChannelOutboundAdapter = {
   sendText: async ({ cfg, to, text, accountId, deps, gifPlayback }) => {
     const send =
       deps?.sendWhatsApp ?? (await import("../../../web/outbound.js")).sendMessageWhatsApp;
+    const maxBytes = resolveWhatsAppMaxBytes({ cfg, accountId });
     const result = await send(to, text, {
       verbose: false,
       cfg,
       accountId: accountId ?? undefined,
       gifPlayback,
+      maxBytes,
     });
     return { channel: "whatsapp", ...result };
   },
   sendMedia: async ({ cfg, to, text, mediaUrl, mediaLocalRoots, accountId, deps, gifPlayback }) => {
     const send =
       deps?.sendWhatsApp ?? (await import("../../../web/outbound.js")).sendMessageWhatsApp;
+    const maxBytes = resolveWhatsAppMaxBytes({ cfg, accountId });
     const result = await send(to, text, {
       verbose: false,
       cfg,
@@ -36,6 +53,7 @@ export const whatsappOutbound: ChannelOutboundAdapter = {
       mediaLocalRoots,
       accountId: accountId ?? undefined,
       gifPlayback,
+      maxBytes,
     });
     return { channel: "whatsapp", ...result };
   },
