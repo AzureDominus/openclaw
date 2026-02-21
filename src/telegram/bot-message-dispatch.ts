@@ -216,7 +216,7 @@ export const dispatchTelegramMessage = async ({
     }
     await draftStream.flush();
   };
-  const splitPartialSegmentOnToolStart = async () => {
+  const splitPartialSegment = async () => {
     if (!draftStream || streamMode !== "partial") {
       return;
     }
@@ -472,12 +472,18 @@ export const dispatchTelegramMessage = async ({
         disableBlockStreaming,
         onPartialReply: draftStream ? (payload) => updateDraftFromPartial(payload.text) : undefined,
         onAssistantMessageStart: draftStream
-          ? () => {
+          ? async () => {
               // Only split preview bubbles in block mode. In partial mode, keep
-              // editing one preview message to avoid flooding the chat.
+              // editing one preview message unless the assistant started a new
+              // message boundary (for example after steer/continue-guard),
+              // where keeping one preview causes overwrite-then-flush behavior.
               logVerbose(
                 `telegram: onAssistantMessageStart called, hasStreamedMessage=${hasStreamedMessage}`,
               );
+              if (streamMode === "partial") {
+                await splitPartialSegment();
+                return;
+              }
               if (shouldSplitPreviewMessages && hasStreamedMessage) {
                 logVerbose(`telegram: calling forceNewMessage()`);
                 draftStream.forceNewMessage();
@@ -500,7 +506,7 @@ export const dispatchTelegramMessage = async ({
                 if (toolEvent.phase !== "start") {
                   return;
                 }
-                await splitPartialSegmentOnToolStart();
+                await splitPartialSegment();
               }
             : undefined,
         onModelSelected,

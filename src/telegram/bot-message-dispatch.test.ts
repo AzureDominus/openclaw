@@ -623,6 +623,58 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
   });
 
+  it("splits partial stream segments on tool start and skips replayed finals", async () => {
+    const draftStream = createDraftStream(999);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Progress update 1" });
+        await replyOptions?.onToolStart?.({ phase: "start", name: "read" });
+        await replyOptions?.onPartialReply?.({ text: "Progress update 2" });
+        await replyOptions?.onToolStart?.({ phase: "start", name: "exec" });
+        await replyOptions?.onPartialReply?.({ text: "Final summary" });
+        await dispatcherOptions.deliver({ text: "Progress update 1" }, { kind: "final" });
+        await dispatcherOptions.deliver({ text: "Progress update 2" }, { kind: "final" });
+        await dispatcherOptions.deliver({ text: "Final summary" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "999" });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(2);
+    expect(editMessageTelegram).toHaveBeenCalledWith(123, 999, "Final summary", expect.any(Object));
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("splits partial stream segments on assistant restarts and skips replayed finals", async () => {
+    const draftStream = createDraftStream(999);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Progress update 1" });
+        await replyOptions?.onAssistantMessageStart?.();
+        await replyOptions?.onPartialReply?.({ text: "Progress update 2" });
+        await replyOptions?.onAssistantMessageStart?.();
+        await replyOptions?.onPartialReply?.({ text: "Final summary" });
+        await dispatcherOptions.deliver({ text: "Progress update 1" }, { kind: "final" });
+        await dispatcherOptions.deliver({ text: "Progress update 2" }, { kind: "final" });
+        await dispatcherOptions.deliver({ text: "Final summary" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "999" });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(2);
+    expect(editMessageTelegram).toHaveBeenCalledWith(123, 999, "Final summary", expect.any(Object));
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
   it("does not force new message on first assistant message start", async () => {
     const draftStream = createDraftStream(999);
     createTelegramDraftStream.mockReturnValue(draftStream);
