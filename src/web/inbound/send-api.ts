@@ -1,7 +1,8 @@
 import type { AnyMessageContent, WAPresence } from "@whiskeysockets/baileys";
-import { recordChannelActivity } from "../../infra/channel-activity.js";
-import { toWhatsappJid } from "../../utils.js";
 import type { ActiveWebSendOptions } from "../active-listener.js";
+import { recordChannelActivity } from "../../infra/channel-activity.js";
+import { extensionForMime } from "../../media/mime.js";
+import { toWhatsappJid } from "../../utils.js";
 
 function recordWhatsAppOutbound(accountId: string) {
   recordChannelActivity({
@@ -15,6 +16,15 @@ function resolveOutboundMessageId(result: unknown): string {
   return typeof result === "object" && result && "key" in result
     ? String((result as { key?: { id?: string } }).key?.id ?? "unknown")
     : "unknown";
+}
+
+function resolveImageDocumentFileName(params: { fileName?: string; mediaType: string }): string {
+  const explicit = params.fileName?.trim();
+  if (explicit) {
+    return explicit;
+  }
+  const ext = extensionForMime(params.mediaType) ?? ".jpg";
+  return `image${ext}`;
 }
 
 export function createWebSendApi(params: {
@@ -36,11 +46,23 @@ export function createWebSendApi(params: {
       let payload: AnyMessageContent;
       if (mediaBuffer && mediaType) {
         if (mediaType.startsWith("image/")) {
-          payload = {
-            image: mediaBuffer,
-            caption: text || undefined,
-            mimetype: mediaType,
-          };
+          if (sendOptions?.sendImageAsDocument) {
+            payload = {
+              document: mediaBuffer,
+              fileName: resolveImageDocumentFileName({
+                fileName: sendOptions.fileName,
+                mediaType,
+              }),
+              caption: text || undefined,
+              mimetype: mediaType,
+            };
+          } else {
+            payload = {
+              image: mediaBuffer,
+              caption: text || undefined,
+              mimetype: mediaType,
+            };
+          }
         } else if (mediaType.startsWith("audio/")) {
           payload = { audio: mediaBuffer, ptt: true, mimetype: mediaType };
         } else if (mediaType.startsWith("video/")) {

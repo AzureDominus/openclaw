@@ -1,11 +1,25 @@
 import type { TelegramInlineButtons } from "../../../telegram/button-types.js";
+import type { ChannelOutboundAdapter } from "../types.js";
 import { markdownToTelegramHtmlChunks } from "../../../telegram/format.js";
 import {
   parseTelegramReplyToMessageId,
   parseTelegramThreadId,
 } from "../../../telegram/outbound-params.js";
 import { sendMessageTelegram } from "../../../telegram/send.js";
-import type { ChannelOutboundAdapter } from "../types.js";
+import { resolveChannelMediaMaxBytes } from "../media-limits.js";
+
+function resolveTelegramMaxBytes(params: {
+  cfg: Parameters<typeof resolveChannelMediaMaxBytes>[0]["cfg"];
+  accountId?: string | null;
+}) {
+  return resolveChannelMediaMaxBytes({
+    cfg: params.cfg,
+    resolveChannelLimitMb: ({ cfg, accountId }) =>
+      cfg.channels?.telegram?.accounts?.[accountId]?.mediaMaxMb ??
+      cfg.channels?.telegram?.mediaMaxMb,
+    accountId: params.accountId,
+  });
+}
 
 export const telegramOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
@@ -34,13 +48,16 @@ export const telegramOutbound: ChannelOutboundAdapter = {
     deps,
     replyToId,
     threadId,
+    cfg,
   }) => {
     const send = deps?.sendTelegram ?? sendMessageTelegram;
     const replyToMessageId = parseTelegramReplyToMessageId(replyToId);
     const messageThreadId = parseTelegramThreadId(threadId);
+    const maxBytes = resolveTelegramMaxBytes({ cfg, accountId });
     const result = await send(to, text, {
       verbose: false,
       mediaUrl,
+      maxBytes,
       textMode: "html",
       messageThreadId,
       replyToMessageId,
@@ -49,10 +66,20 @@ export const telegramOutbound: ChannelOutboundAdapter = {
     });
     return { channel: "telegram", ...result };
   },
-  sendPayload: async ({ to, payload, mediaLocalRoots, accountId, deps, replyToId, threadId }) => {
+  sendPayload: async ({
+    cfg,
+    to,
+    payload,
+    mediaLocalRoots,
+    accountId,
+    deps,
+    replyToId,
+    threadId,
+  }) => {
     const send = deps?.sendTelegram ?? sendMessageTelegram;
     const replyToMessageId = parseTelegramReplyToMessageId(replyToId);
     const messageThreadId = parseTelegramThreadId(threadId);
+    const maxBytes = resolveTelegramMaxBytes({ cfg, accountId });
     const telegramData = payload.channelData?.telegram as
       | { buttons?: TelegramInlineButtons; quoteText?: string }
       | undefined;
@@ -70,6 +97,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
       messageThreadId,
       replyToMessageId,
       quoteText,
+      maxBytes,
       accountId: accountId ?? undefined,
       mediaLocalRoots,
     };

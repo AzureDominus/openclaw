@@ -75,6 +75,22 @@ describe("createWebSendApi", () => {
     );
   });
 
+  it("can send images as documents when requested", async () => {
+    const payload = Buffer.from("img");
+    await api.sendMessage("+1555", "cap", payload, "image/png", {
+      sendImageAsDocument: true,
+    });
+    expect(sendMessage).toHaveBeenCalledWith(
+      "1555@s.whatsapp.net",
+      expect.objectContaining({
+        document: payload,
+        fileName: "image.png",
+        caption: "cap",
+        mimetype: "image/png",
+      }),
+    );
+  });
+
   it("supports audio as push-to-talk voice note", async () => {
     const payload = Buffer.from("aud");
     await api.sendMessage("+1555", "", payload, "audio/ogg", { accountId: "alt" });

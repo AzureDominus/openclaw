@@ -102,6 +102,13 @@ export type TelegramAccountConfig = {
   /** Telegram stream preview mode (off|partial|block). Default: partial. */
   streamMode?: "off" | "partial" | "block";
   mediaMaxMb?: number;
+  /**
+   * Outbound image upload mode:
+   * - "photo": always use sendPhoto (Telegram may recompress)
+   * - "document": always use sendDocument (max fidelity)
+   * - "auto": use document for browser screenshots/photo-unsafe dimensions, else photo
+   */
+  imageUploadMode?: "photo" | "document" | "auto";
   /** Telegram API client timeout in seconds (grammY ApiClientOptions). */
   timeoutSeconds?: number;
   /** Retry policy for outbound Telegram API calls. */
