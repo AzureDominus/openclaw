@@ -90,6 +90,11 @@ export type RunEmbeddedPiAgentParams = {
   abortSignal?: AbortSignal;
   shouldEmitToolResult?: () => boolean;
   shouldEmitToolOutput?: () => boolean;
+  /**
+   * True when onPartialReply is wired to a user-facing streaming surface.
+   * Internal partial callbacks (for typing only) should set this to false.
+   */
+  hasUserFacingPartialReply?: boolean;
   onPartialReply?: (payload: EmbeddedReplyPayload) => void | Promise<void>;
   onAssistantMessageStart?: () => void | Promise<void>;
   onBlockReply?: (payload: BlockReplyPayload) => void | Promise<void>;

@@ -637,8 +637,12 @@ export async function runEmbeddedPiAgent(
           // `streamMode: off` channels lose progress updates entirely (no partial
           // callback path exists there), so only suppress these callbacks when a
           // partial streaming surface is active.
+          const hasUserFacingPartialReply =
+            typeof params.hasUserFacingPartialReply === "boolean"
+              ? params.hasUserFacingPartialReply
+              : Boolean(params.onPartialReply);
           const suppressContinueGuardSurfaceCallbacks =
-            isContinueGuardAttempt && Boolean(params.onPartialReply);
+            isContinueGuardAttempt && hasUserFacingPartialReply;
 
           const attempt = await runEmbeddedAttempt({
             sessionId: params.sessionId,
