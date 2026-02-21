@@ -39,6 +39,8 @@ export type NormalizedMessage = {
 export type ToolCard = {
   kind: "call" | "result";
   name: string;
+  callId?: string | null;
   args?: unknown;
   text?: string;
+  sidebarText?: string;
 };
