@@ -55,6 +55,22 @@ function normalizePartialDraftText(text?: string): string {
   return stripDeclaredStopReasonLine(text);
 }
 
+function extractAssistantSegmentId(channelData: unknown): string | undefined {
+  if (!channelData || typeof channelData !== "object") {
+    return undefined;
+  }
+  const openclaw = (channelData as { openclaw?: unknown }).openclaw;
+  if (!openclaw || typeof openclaw !== "object") {
+    return undefined;
+  }
+  const segmentId = (openclaw as { assistantSegmentId?: unknown }).assistantSegmentId;
+  if (typeof segmentId !== "string") {
+    return undefined;
+  }
+  const normalized = segmentId.trim();
+  return normalized.length > 0 ? normalized : undefined;
+}
+
 function isLikelyRegressiveFinalEdit(params: {
   currentPreviewText: string;
   finalText: string;
@@ -225,6 +241,19 @@ export const dispatchTelegramMessage = async ({
   const reasoningLane = lanes.reasoning;
   let splitReasoningOnNextStream = false;
   const reasoningStepState = createTelegramReasoningStepState();
+  const currentPartialSegmentIdByLane: Partial<Record<LaneName, string>> = {};
+  const streamedPartialSegmentIds = new Set<string>();
+  const streamedPartialTextsFallback = new Set<string>();
+  const rememberStreamedPartialSegment = (params: { text?: string; segmentId?: string }) => {
+    if (params.segmentId) {
+      streamedPartialSegmentIds.add(params.segmentId);
+      return;
+    }
+    const normalized = normalizeDraftTextForDedup(params.text);
+    if (normalized) {
+      streamedPartialTextsFallback.add(normalized);
+    }
+  };
   type ArchivedPreview = { messageId: number; textSnapshot: string };
   const archivedAnswerPreviews: ArchivedPreview[] = [];
   type SplitLaneSegment = { lane: LaneName; text: string };
@@ -239,9 +268,12 @@ export const dispatchTelegramMessage = async ({
     }
     return segments;
   };
-  const resetDraftLaneState = (lane: DraftLaneState) => {
+  const resetDraftLaneState = (lane: DraftLaneState, laneName?: LaneName) => {
     lane.lastPartialText = "";
     lane.hasStreamedMessage = false;
+    if (laneName) {
+      delete currentPartialSegmentIdByLane[laneName];
+    }
   };
   const updateDraftFromPartial = (lane: DraftLaneState, text: string | undefined) => {
     const normalizedText = normalizePartialDraftText(text);
@@ -267,8 +299,15 @@ export const dispatchTelegramMessage = async ({
     lane.lastPartialText = normalizedText;
     laneStream.update(normalizedText);
   };
-  const ingestDraftLaneSegments = (text: string | undefined) => {
-    for (const segment of splitTextIntoLaneSegments(text)) {
+  const ingestDraftLaneSegments = (payload: {
+    text?: string;
+    channelData?: Record<string, unknown>;
+  }) => {
+    const segmentId = extractAssistantSegmentId(payload.channelData);
+    for (const segment of splitTextIntoLaneSegments(payload.text)) {
+      if (segmentId) {
+        currentPartialSegmentIdByLane[segment.lane] = segmentId;
+      }
       if (segment.lane === "reasoning") {
         reasoningStepState.noteReasoningHint();
         reasoningStepState.noteReasoningDelivered();
@@ -595,6 +634,22 @@ export const dispatchTelegramMessage = async ({
           )?.buttons;
           const segments = splitTextIntoLaneSegments(payload.text);
           const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+          const finalAssistantSegmentId = extractAssistantSegmentId(payload.channelData);
+          if (info.kind === "final" && streamMode === "partial" && !payload.isError && !hasMedia) {
+            const normalizedFinalText = normalizeDraftTextForDedup(payload.text);
+            const hasReplaySegmentId =
+              typeof finalAssistantSegmentId === "string" &&
+              streamedPartialSegmentIds.has(finalAssistantSegmentId);
+            const isReplayedPartialSegment =
+              hasReplaySegmentId ||
+              (!finalAssistantSegmentId &&
+                normalizedFinalText.length > 0 &&
+                streamedPartialTextsFallback.has(normalizedFinalText));
+            if (isReplayedPartialSegment) {
+              deliveryState.delivered = true;
+              return;
+            }
+          }
 
           const flushBufferedFinalAnswer = async () => {
             const buffered = reasoningStepState.takeBufferedFinalAnswer();
@@ -698,7 +753,7 @@ export const dispatchTelegramMessage = async ({
         disableBlockStreaming,
         onPartialReply:
           answerLane.stream || reasoningLane.stream
-            ? (payload) => ingestDraftLaneSegments(payload.text)
+            ? (payload) => ingestDraftLaneSegments(payload)
             : undefined,
         onReasoningStream: reasoningLane.stream
           ? (payload) => {
@@ -707,16 +762,20 @@ export const dispatchTelegramMessage = async ({
               // preview and cause duplicate reasoning sends on reasoning final.
               if (splitReasoningOnNextStream) {
                 reasoningLane.stream?.forceNewMessage();
-                resetDraftLaneState(reasoningLane);
+                resetDraftLaneState(reasoningLane, "reasoning");
                 splitReasoningOnNextStream = false;
               }
-              ingestDraftLaneSegments(payload.text);
+              ingestDraftLaneSegments(payload);
             }
           : undefined,
         onAssistantMessageStart: answerLane.stream
           ? async () => {
               reasoningStepState.resetForNextStep();
               if (answerLane.hasStreamedMessage) {
+                rememberStreamedPartialSegment({
+                  text: answerLane.lastPartialText,
+                  segmentId: currentPartialSegmentIdByLane.answer,
+                });
                 const previewMessageId = answerLane.stream?.messageId();
                 if (typeof previewMessageId === "number") {
                   archivedAnswerPreviews.push({
@@ -726,7 +785,7 @@ export const dispatchTelegramMessage = async ({
                 }
                 answerLane.stream?.forceNewMessage();
               }
-              resetDraftLaneState(answerLane);
+              resetDraftLaneState(answerLane, "answer");
             }
           : undefined,
         onReasoningEnd: reasoningLane.stream
