@@ -561,6 +561,12 @@ async function emitToolResultOutput(params: {
     return;
   }
 
+  // Browser screenshots should only be sent when the model explicitly uses
+  // message.send to avoid duplicate media delivery.
+  if (toolName === "browser" || rawToolName === "browser") {
+    return;
+  }
+
   if (!mediaReply) {
     return;
   }
