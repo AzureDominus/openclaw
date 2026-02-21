@@ -537,7 +537,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.stop).toHaveBeenCalled();
   });
 
-  it("disables block streaming when streamMode is off", async () => {
+  it("keeps block streaming enabled when streamMode is off", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
       return { queuedFinal: true };
@@ -547,13 +547,14 @@ describe("dispatchTelegramMessage draft streaming", () => {
     await dispatchWithContext({
       context: createContext(),
       streamMode: "off",
+      telegramCfg: { blockStreaming: false },
     });
 
     expect(createTelegramDraftStream).not.toHaveBeenCalled();
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
       expect.objectContaining({
         replyOptions: expect.objectContaining({
-          disableBlockStreaming: true,
+          disableBlockStreaming: false,
         }),
       }),
     );

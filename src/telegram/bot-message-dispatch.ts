@@ -265,12 +265,17 @@ export const dispatchTelegramMessage = async ({
     resetDraftTracking();
   };
 
+  // Keep block/progress updates enabled when stream mode is off.
+  // `streamMode: off` should disable preview editing, not suppress
+  // user-facing progress checkpoints between tool bursts.
   const disableBlockStreaming =
-    typeof telegramCfg.blockStreaming === "boolean"
-      ? !telegramCfg.blockStreaming
-      : draftStream || streamMode === "off"
-        ? true
-        : undefined;
+    streamMode === "off"
+      ? false
+      : typeof telegramCfg.blockStreaming === "boolean"
+        ? !telegramCfg.blockStreaming
+        : draftStream
+          ? true
+          : undefined;
 
   const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
     cfg,
