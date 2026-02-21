@@ -2,7 +2,7 @@
 
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import { renderToolCard } from "./tool-cards.ts";
+import { extractToolCards, renderToolCard } from "./tool-cards.ts";
 
 vi.mock("../icons.ts", () => ({
   icons: {},
@@ -184,5 +184,22 @@ describe("tool-cards", () => {
         entryUrl: "/__openclaw__/canvas/documents/cv_sidebar/index.html",
       }),
     );
+  });
+
+  it("serializes structured tool outputs when text is not provided", () => {
+    const cards = extractToolCards({
+      role: "assistant",
+      content: [
+        {
+          type: "tool_result",
+          name: "browser.snapshot",
+          result: { title: "Example", url: "https://example.com" },
+        },
+      ],
+    });
+
+    expect(cards).toHaveLength(1);
+    expect(cards[0]?.outputText).toContain('"title": "Example"');
+    expect(cards[0]?.outputText).toContain('"url": "https://example.com"');
   });
 });

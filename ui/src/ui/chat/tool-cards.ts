@@ -41,14 +41,44 @@ function coerceArgs(value: unknown): unknown {
   }
 }
 
+function stringifyToolValue(value: unknown): string | undefined {
+  if (value === null || value === undefined) {
+    return undefined;
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    const textParts = value
+      .map((item) => {
+        if (!item || typeof item !== "object") {
+          return null;
+        }
+        const record = item as Record<string, unknown>;
+        return record.type === "text" && typeof record.text === "string" ? record.text : null;
+      })
+      .filter((part): part is string => Boolean(part));
+    if (textParts.length > 0) {
+      return textParts.join("\n");
+    }
+  }
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return "[unserializable tool output]";
+  }
+}
+
 function extractToolText(item: Record<string, unknown>): string | undefined {
-  if (typeof item.text === "string") {
-    return item.text;
-  }
-  if (typeof item.content === "string") {
-    return item.content;
-  }
-  return undefined;
+  return (
+    stringifyToolValue(item.text) ??
+    stringifyToolValue(item.content) ??
+    stringifyToolValue(item.result) ??
+    stringifyToolValue(item.output)
+  );
 }
 
 export function extractToolPreview(

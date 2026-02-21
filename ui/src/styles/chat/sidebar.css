@@ -281,7 +281,11 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   padding: 14px 16px;
-  overflow-x: auto;
+  overflow: auto;
+  max-height: min(52vh, 560px);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
   margin-top: 0.75em;
 }
 
@@ -295,6 +299,9 @@
   padding: 0;
   font-size: 12.5px;
   line-height: 1.55;
+  white-space: inherit;
+  overflow-wrap: inherit;
+  word-break: inherit;
 }
 
 /* ── Blockquotes ── */
