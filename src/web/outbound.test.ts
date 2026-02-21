@@ -8,8 +8,19 @@ import { redactIdentifier } from "../logging/redact-identifier.js";
 import { setActiveWebListener } from "./active-listener.js";
 
 const loadWebMediaMock = vi.fn();
+const TINY_PNG_BUFFER = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7+8f8AAAAASUVORK5CYII=",
+  "base64",
+);
+const TALL_SVG_BUFFER = Buffer.from(
+  '<svg xmlns="http://www.w3.org/2000/svg" width="1265" height="4831"></svg>',
+);
 vi.mock("./media.js", () => ({
   loadWebMedia: (...args: unknown[]) => loadWebMediaMock(...args),
+}));
+const loadConfigMock = vi.fn(() => ({}));
+vi.mock("../config/config.js", () => ({
+  loadConfig: () => loadConfigMock(),
 }));
 
 import { sendMessageWhatsApp, sendPollWhatsApp, sendReactionWhatsApp } from "./outbound.js";
@@ -22,6 +33,7 @@ describe("web outbound", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    loadConfigMock.mockReturnValue({});
     setActiveWebListener({
       sendComposingTo,
       sendMessage,
@@ -121,6 +133,106 @@ describe("web outbound", () => {
       mediaUrl: "/tmp/pic.jpg",
     });
     expect(sendMessage).toHaveBeenLastCalledWith("+1555", "pic", buf, "image/jpeg");
+  });
+
+  it("uses configured mediaMaxMb when loading outbound media", async () => {
+    const buf = Buffer.from("img");
+    loadConfigMock.mockReturnValue({
+      channels: { whatsapp: { mediaMaxMb: 12 } },
+    });
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: buf,
+      contentType: "image/jpeg",
+      kind: "image",
+    });
+
+    await sendMessageWhatsApp("+1555", "pic", {
+      verbose: false,
+      mediaUrl: "/tmp/pic.jpg",
+    });
+
+    expect(loadWebMediaMock).toHaveBeenCalledWith("/tmp/pic.jpg", {
+      maxBytes: 12 * 1024 * 1024,
+      localRoots: undefined,
+    });
+  });
+
+  it("sends oversized browser screenshots as documents in auto mode", async () => {
+    const buf = Buffer.alloc(5 * 1024 * 1024 + 1);
+    loadConfigMock.mockReturnValue({
+      channels: { whatsapp: { imageUploadMode: "auto" } },
+    });
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: buf,
+      contentType: "image/jpeg",
+      kind: "image",
+      fileName: "shot.jpg",
+    });
+
+    await sendMessageWhatsApp("+1555", "pic", {
+      verbose: false,
+      mediaUrl: "/home/user/.openclaw/media/browser/shot.jpg",
+    });
+
+    expect(sendMessage).toHaveBeenLastCalledWith(
+      "+1555",
+      "pic",
+      expect.any(Buffer),
+      "image/jpeg",
+      expect.objectContaining({
+        sendImageAsDocument: true,
+        fileName: "shot.jpg",
+      }),
+    );
+  });
+
+  it("keeps small browser screenshots as images in auto mode", async () => {
+    const buf = TINY_PNG_BUFFER;
+    loadConfigMock.mockReturnValue({
+      channels: { whatsapp: { imageUploadMode: "auto" } },
+    });
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: buf,
+      contentType: "image/jpeg",
+      kind: "image",
+      fileName: "shot.jpg",
+    });
+
+    await sendMessageWhatsApp("+1555", "pic", {
+      verbose: false,
+      mediaUrl: "/home/user/.openclaw/media/browser/shot.jpg",
+    });
+
+    expect(sendMessage).toHaveBeenLastCalledWith("+1555", "pic", buf, "image/jpeg");
+  });
+
+  it("sends tall browser screenshots as documents in auto mode", async () => {
+    const buf = TALL_SVG_BUFFER;
+    loadConfigMock.mockReturnValue({
+      channels: { whatsapp: { imageUploadMode: "auto" } },
+    });
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: buf,
+      contentType: "image/png",
+      kind: "image",
+      fileName: "long.png",
+    });
+
+    await sendMessageWhatsApp("+1555", "pic", {
+      verbose: false,
+      mediaUrl: "/home/user/.openclaw/media/browser/long.png",
+    });
+
+    expect(sendMessage).toHaveBeenLastCalledWith(
+      "+1555",
+      "pic",
+      expect.any(Buffer),
+      "image/png",
+      expect.objectContaining({
+        sendImageAsDocument: true,
+        fileName: "long.png",
+      }),
+    );
   });
 
   it("maps other kinds to document with filename", async () => {

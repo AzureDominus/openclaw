@@ -5,6 +5,8 @@ import type {
   ReactionTypeEmoji,
 } from "@grammyjs/types";
 import { type ApiClientOptions, Bot, HttpError, InputFile } from "grammy";
+import type { RetryConfig } from "../infra/retry.js";
+import type { TelegramInlineButtons } from "./button-types.js";
 import { loadConfig } from "../config/config.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { logVerbose } from "../globals.js";
@@ -12,17 +14,17 @@ import { recordChannelActivity } from "../infra/channel-activity.js";
 import { isDiagnosticFlagEnabled } from "../infra/diagnostic-flags.js";
 import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
 import { createTelegramRetryRunner } from "../infra/retry-policy.js";
-import type { RetryConfig } from "../infra/retry.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { isLikelyBrowserScreenshotMediaUrl } from "../media/browser-screenshot.js";
 import { mediaKindFromMime } from "../media/constants.js";
+import { getImageMetadata } from "../media/image-ops.js";
 import { isGifMedia } from "../media/mime.js";
 import { normalizePollInput, type PollInput } from "../polls.js";
 import { loadWebMedia } from "../web/media.js";
 import { type ResolvedTelegramAccount, resolveTelegramAccount } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { buildTelegramThreadParams } from "./bot/helpers.js";
-import type { TelegramInlineButtons } from "./button-types.js";
 import { splitTelegramCaption } from "./caption.js";
 import { resolveTelegramFetch } from "./fetch.js";
 import { renderTelegramHtmlText } from "./format.js";
@@ -92,7 +94,50 @@ const MESSAGE_NOT_MODIFIED_RE =
   /400:\s*Bad Request:\s*message is not modified|MESSAGE_NOT_MODIFIED/i;
 const CHAT_NOT_FOUND_RE = /400: Bad Request: chat not found/i;
 const sendLogger = createSubsystemLogger("telegram/send");
+const TELEGRAM_PHOTO_MAX_BYTES = 10 * 1024 * 1024;
+const TELEGRAM_PHOTO_MAX_DIM_SUM = 10_000;
+const TELEGRAM_PHOTO_MAX_ASPECT_RATIO = 20;
+const TELEGRAM_BROWSER_SCREENSHOT_DOC_MAX_SIDE = 3000;
+const TELEGRAM_BROWSER_SCREENSHOT_DOC_MAX_PIXELS = 5_000_000;
 const diagLogger = createSubsystemLogger("telegram/diagnostic");
+
+async function shouldSendTelegramImageAsDocument(params: {
+  mode?: "photo" | "auto" | "document";
+  buffer: Buffer;
+  mediaUrl?: string;
+}): Promise<boolean> {
+  const mode = params.mode ?? "auto";
+  if (mode === "document") {
+    return true;
+  }
+  if (mode === "photo") {
+    return false;
+  }
+  if (params.buffer.byteLength > TELEGRAM_PHOTO_MAX_BYTES) {
+    return true;
+  }
+  const meta = await getImageMetadata(params.buffer).catch(() => null);
+  const width = Number(meta?.width ?? 0);
+  const height = Number(meta?.height ?? 0);
+  if (width <= 0 || height <= 0) {
+    return false;
+  }
+  if (isLikelyBrowserScreenshotMediaUrl(params.mediaUrl)) {
+    const maxSide = Math.max(width, height);
+    const pixels = width * height;
+    if (
+      maxSide > TELEGRAM_BROWSER_SCREENSHOT_DOC_MAX_SIDE ||
+      pixels > TELEGRAM_BROWSER_SCREENSHOT_DOC_MAX_PIXELS
+    ) {
+      return true;
+    }
+  }
+  if (width + height > TELEGRAM_PHOTO_MAX_DIM_SUM) {
+    return true;
+  }
+  const ratio = Math.max(width, height) / Math.max(1, Math.min(width, height));
+  return ratio > TELEGRAM_PHOTO_MAX_ASPECT_RATIO;
+}
 
 function createTelegramHttpLogger(cfg: ReturnType<typeof loadConfig>) {
   const enabled = isDiagnosticFlagEnabled("telegram.http", cfg);
@@ -557,6 +602,15 @@ export async function sendMessageTelegram(
       contentType: media.contentType,
       fileName: media.fileName,
     });
+    const imageUploadMode = account.config.imageUploadMode ?? "auto";
+    const sendImageAsDocument =
+      kind === "image"
+        ? await shouldSendTelegramImageAsDocument({
+            mode: imageUploadMode,
+            buffer: media.buffer,
+            mediaUrl,
+          })
+        : false;
     const isVideoNote = kind === "video" && opts.asVideoNote === true;
     const fileName = media.fileName ?? (isGif ? "animation.gif" : inferFilename(kind)) ?? "file";
     const file = new InputFile(media.buffer, fileName);
@@ -613,6 +667,17 @@ export async function sendMessageTelegram(
         };
       }
       if (kind === "image") {
+        if (sendImageAsDocument) {
+          return {
+            label: "document",
+            sender: (effectiveParams: Record<string, unknown> | undefined) =>
+              api.sendDocument(
+                chatId,
+                file,
+                effectiveParams as Parameters<typeof api.sendDocument>[2],
+              ) as Promise<TelegramMessageLike>,
+          };
+        }
         return {
           label: "photo",
           sender: (effectiveParams: Record<string, unknown> | undefined) =>

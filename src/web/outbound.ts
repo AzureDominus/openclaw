@@ -6,12 +6,53 @@ import { redactIdentifier } from "../logging/redact-identifier.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { convertMarkdownTables } from "../markdown/tables.js";
 import { markdownToWhatsApp } from "../markdown/whatsapp.js";
+import { isLikelyBrowserScreenshotMediaUrl } from "../media/browser-screenshot.js";
+import { getImageMetadata } from "../media/image-ops.js";
 import { normalizePollInput, type PollInput } from "../polls.js";
 import { toWhatsappJid } from "../utils.js";
+import { resolveWhatsAppAccount } from "./accounts.js";
 import { type ActiveWebSendOptions, requireActiveWebListener } from "./active-listener.js";
 import { loadWebMedia } from "./media.js";
 
 const outboundLog = createSubsystemLogger("gateway/channels/whatsapp").child("outbound");
+const WHATSAPP_OVERSIZE_DOC_MAX_SIDE = 4096;
+const WHATSAPP_OVERSIZE_DOC_MAX_BYTES = 5 * 1024 * 1024;
+const MB = 1024 * 1024;
+
+function resolveWhatsAppMaxBytes(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  accountId?: string | null;
+}) {
+  const accountId = (params.accountId ?? "").trim();
+  const limitMb =
+    params.cfg.channels?.whatsapp?.accounts?.[accountId]?.mediaMaxMb ??
+    params.cfg.channels?.whatsapp?.mediaMaxMb ??
+    params.cfg.agents?.defaults?.mediaMaxMb;
+  return typeof limitMb === "number" && limitMb > 0 ? limitMb * MB : undefined;
+}
+
+async function shouldSendWhatsAppImageAsDocument(params: {
+  mode: "image" | "auto" | "document";
+  mediaUrl?: string;
+  buffer: Buffer;
+}): Promise<boolean> {
+  if (params.mode === "document") {
+    return true;
+  }
+  if (params.mode === "image") {
+    return false;
+  }
+  if (!isLikelyBrowserScreenshotMediaUrl(params.mediaUrl)) {
+    return false;
+  }
+  if (params.buffer.byteLength > WHATSAPP_OVERSIZE_DOC_MAX_BYTES) {
+    return true;
+  }
+  const meta = await getImageMetadata(params.buffer).catch(() => null);
+  const width = Number(meta?.width ?? 0);
+  const height = Number(meta?.height ?? 0);
+  return width > WHATSAPP_OVERSIZE_DOC_MAX_SIDE || height > WHATSAPP_OVERSIZE_DOC_MAX_SIDE;
+}
 
 export async function sendMessageWhatsApp(
   to: string,
@@ -22,6 +63,7 @@ export async function sendMessageWhatsApp(
     mediaLocalRoots?: readonly string[];
     gifPlayback?: boolean;
     accountId?: string;
+    maxBytes?: number;
   },
 ): Promise<{ messageId: string; toJid: string }> {
   let text = body;
@@ -31,6 +73,14 @@ export async function sendMessageWhatsApp(
     options.accountId,
   );
   const cfg = loadConfig();
+  const account = resolveWhatsAppAccount({ cfg, accountId: resolvedAccountId });
+  const maxBytes =
+    options.maxBytes ??
+    resolveWhatsAppMaxBytes({
+      cfg,
+      accountId: resolvedAccountId,
+    });
+  const imageUploadMode = account.imageUploadMode ?? "auto";
   const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "whatsapp",
@@ -50,8 +100,10 @@ export async function sendMessageWhatsApp(
     let mediaBuffer: Buffer | undefined;
     let mediaType: string | undefined;
     let documentFileName: string | undefined;
+    let sendImageAsDocument = false;
     if (options.mediaUrl) {
       const media = await loadWebMedia(options.mediaUrl, {
+        maxBytes,
         localRoots: options.mediaLocalRoots,
       });
       const caption = text || undefined;
@@ -67,6 +119,14 @@ export async function sendMessageWhatsApp(
         text = caption ?? "";
       } else if (media.kind === "image") {
         text = caption ?? "";
+        sendImageAsDocument = await shouldSendWhatsAppImageAsDocument({
+          mode: imageUploadMode,
+          mediaUrl: options.mediaUrl,
+          buffer: media.buffer,
+        });
+        if (sendImageAsDocument) {
+          documentFileName = media.fileName;
+        }
       } else {
         text = caption ?? "";
         documentFileName = media.fileName;
@@ -78,10 +138,11 @@ export async function sendMessageWhatsApp(
     const hasExplicitAccountId = Boolean(options.accountId?.trim());
     const accountId = hasExplicitAccountId ? resolvedAccountId : undefined;
     const sendOptions: ActiveWebSendOptions | undefined =
-      options.gifPlayback || accountId || documentFileName
+      options.gifPlayback || accountId || documentFileName || sendImageAsDocument
         ? {
             ...(options.gifPlayback ? { gifPlayback: true } : {}),
             ...(documentFileName ? { fileName: documentFileName } : {}),
+            ...(sendImageAsDocument ? { sendImageAsDocument: true } : {}),
             accountId,
           }
         : undefined;

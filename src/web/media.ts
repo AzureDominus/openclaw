@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { SafeOpenError, readLocalFileSafely } from "../infra/fs-safe.js";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { type MediaKind, maxBytesForKind, mediaKindFromMime } from "../media/constants.js";
 import { fetchRemoteMedia } from "../media/fetch.js";
 import {
@@ -292,10 +292,22 @@ async function loadWebMediaInternal(
     const cap = maxBytes !== undefined ? maxBytes : maxBytesForKind(params.kind);
     if (params.kind === "image") {
       const isGif = params.contentType === "image/gif";
+      const isHeic = isHeicSource({
+        contentType: params.contentType,
+        fileName: params.fileName,
+      });
       if (isGif || !optimizeImages) {
         if (params.buffer.length > cap) {
           throw new Error(formatCapLimit(isGif ? "GIF" : "Media", cap, params.buffer.length));
         }
+        return {
+          buffer: params.buffer,
+          contentType: params.contentType,
+          kind: params.kind,
+          fileName: params.fileName,
+        };
+      }
+      if (params.buffer.length <= cap && !isHeic) {
         return {
           buffer: params.buffer,
           contentType: params.contentType,

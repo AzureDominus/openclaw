@@ -8,6 +8,13 @@ import {
 import { clearSentMessageCache, recordSentMessage, wasSentByBot } from "./sent-message-cache.js";
 
 installTelegramSendTestHooks();
+const TINY_PNG_BUFFER = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7+8f8AAAAASUVORK5CYII=",
+  "base64",
+);
+const TALL_SVG_BUFFER = Buffer.from(
+  '<svg xmlns="http://www.w3.org/2000/svg" width="1265" height="4831"></svg>',
+);
 
 const { botApi, botCtorSpy, loadConfig, loadWebMedia, maybePersistResolvedTelegramTarget } =
   getTelegramSendTestMocks();
@@ -440,6 +447,108 @@ describe("sendMessageTelegram", () => {
       parse_mode: "HTML",
       message_thread_id: 99,
     });
+  });
+
+  it("uses sendDocument for oversized images in auto imageUploadMode", async () => {
+    const chatId = "123";
+    const sendPhoto = vi.fn();
+    const sendDocument = vi.fn().mockResolvedValue({
+      message_id: 59,
+      chat: { id: chatId },
+    });
+    const api = { sendPhoto, sendDocument } as unknown as {
+      sendPhoto: typeof sendPhoto;
+      sendDocument: typeof sendDocument;
+    };
+
+    loadConfig.mockReturnValue({
+      channels: { telegram: { imageUploadMode: "auto" } },
+    });
+    loadWebMedia.mockResolvedValueOnce({
+      buffer: Buffer.alloc(10 * 1024 * 1024 + 1),
+      contentType: "image/jpeg",
+      fileName: "photo.jpg",
+    });
+
+    await sendMessageTelegram(chatId, "large screenshot", {
+      token: "tok",
+      api,
+      mediaUrl: "/home/user/.openclaw/media/browser/shot.jpg",
+    });
+
+    expect(sendDocument).toHaveBeenCalledWith(chatId, expect.anything(), {
+      caption: "large screenshot",
+      parse_mode: "HTML",
+    });
+    expect(sendPhoto).not.toHaveBeenCalled();
+  });
+
+  it("keeps sendPhoto for browser screenshots when not oversized in auto mode", async () => {
+    const chatId = "123";
+    const sendPhoto = vi.fn().mockResolvedValue({
+      message_id: 60,
+      chat: { id: chatId },
+    });
+    const sendDocument = vi.fn();
+    const api = { sendPhoto, sendDocument } as unknown as {
+      sendPhoto: typeof sendPhoto;
+      sendDocument: typeof sendDocument;
+    };
+
+    loadConfig.mockReturnValue({
+      channels: { telegram: { imageUploadMode: "auto" } },
+    });
+    loadWebMedia.mockResolvedValueOnce({
+      buffer: TINY_PNG_BUFFER,
+      contentType: "image/png",
+      fileName: "photo.png",
+    });
+
+    await sendMessageTelegram(chatId, "small screenshot", {
+      token: "tok",
+      api,
+      mediaUrl: "/home/user/.openclaw/media/browser/shot.jpg",
+    });
+
+    expect(sendPhoto).toHaveBeenCalledWith(chatId, expect.anything(), {
+      caption: "small screenshot",
+      parse_mode: "HTML",
+    });
+    expect(sendDocument).not.toHaveBeenCalled();
+  });
+
+  it("uses sendDocument for tall browser screenshots in auto mode", async () => {
+    const chatId = "123";
+    const sendPhoto = vi.fn();
+    const sendDocument = vi.fn().mockResolvedValue({
+      message_id: 61,
+      chat: { id: chatId },
+    });
+    const api = { sendPhoto, sendDocument } as unknown as {
+      sendPhoto: typeof sendPhoto;
+      sendDocument: typeof sendDocument;
+    };
+
+    loadConfig.mockReturnValue({
+      channels: { telegram: { imageUploadMode: "auto" } },
+    });
+    loadWebMedia.mockResolvedValueOnce({
+      buffer: TALL_SVG_BUFFER,
+      contentType: "image/png",
+      fileName: "fullpage.png",
+    });
+
+    await sendMessageTelegram(chatId, "long screenshot", {
+      token: "tok",
+      api,
+      mediaUrl: "/home/user/.openclaw/media/browser/fullpage.png",
+    });
+
+    expect(sendDocument).toHaveBeenCalledWith(chatId, expect.anything(), {
+      caption: "long screenshot",
+      parse_mode: "HTML",
+    });
+    expect(sendPhoto).not.toHaveBeenCalled();
   });
 
   it("splits long captions into media + text messages when text exceeds 1024 chars", async () => {

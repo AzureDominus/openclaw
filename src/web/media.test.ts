@@ -171,11 +171,11 @@ describe("web media loading", () => {
     );
   });
 
-  it("sniffs mime before extension when loading local files", async () => {
+  it("sniffs mime before extension when loading local files without forcing conversion", async () => {
     const result = await loadWebMedia(tinyPngWrongExtFile, 1024 * 1024);
 
     expect(result.kind).toBe("image");
-    expect(result.contentType).toBe("image/jpeg");
+    expect(result.contentType).toBe("image/png");
   });
 
   it("includes URL + status in fetch errors", async () => {
