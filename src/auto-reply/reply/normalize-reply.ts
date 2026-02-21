@@ -21,6 +21,8 @@ export type NormalizeReplyOptions = {
   responsePrefixContext?: ResponsePrefixContext;
   onHeartbeatStrip?: () => void;
   stripHeartbeat?: boolean;
+  /** Strip leaked plain-text tool-call drafts (assistant to=functions.*) from outbound text. */
+  stripFailedToolCallDraft?: boolean;
   silentToken?: string;
   onSkip?: (reason: NormalizeReplySkipReason) => void;
 };
@@ -77,7 +79,10 @@ export function normalizeReplyPayload(
   }
 
   if (text) {
-    text = sanitizeUserFacingText(text, { errorContext: Boolean(payload.isError) });
+    text = sanitizeUserFacingText(text, {
+      errorContext: Boolean(payload.isError),
+      stripFailedToolCallDraft: opts.stripFailedToolCallDraft,
+    });
   }
   if (!text?.trim() && !hasMedia && !hasChannelData) {
     opts.onSkip?.("empty");

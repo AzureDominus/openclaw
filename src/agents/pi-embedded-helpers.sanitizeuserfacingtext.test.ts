@@ -15,12 +15,53 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText("Hi <final>there</final>!")).toBe("Hi there!");
   });
 
-  it.each(["202 results found", "400 days left"])(
-    "does not clobber normal numeric prefix: %s",
-    (text) => {
-      expect(sanitizeUserFacingText(text)).toBe(text);
-    },
-  );
+  it("strips leaked plain-text tool-call drafts from user-facing text", () => {
+    const leaked =
+      "Quick check first. +#+#+#+#+assistant to=functions.exec\n" +
+      '{"command":"pwd","workdir":"/tmp"}';
+    expect(sanitizeUserFacingText(leaked)).toBe("Quick check first.");
+  });
+
+  it("strips leaked browser-tool plain-text drafts after continue-guard noise", () => {
+    const leaked =
+      "Found it. I’m entering the newest code and submitting now. +#+#+#+#+assistant to=functions.browser մեկնաբանություն ppjson\n" +
+      '{"action":"act","target":"host","targetId":"2879529FB8891C7A057C32D61626AA0B","request":{"kind":"type","ref":"e3","text":"433848"}}';
+    expect(sanitizeUserFacingText(leaked)).toBe(
+      "Found it. I’m entering the newest code and submitting now.",
+    );
+  });
+
+  it("does not strip plain-text mentions when no tool-call JSON draft follows", () => {
+    const text = "Debug note: assistant to=functions.browser appears in this doc string.";
+    expect(sanitizeUserFacingText(text)).toBe(text);
+  });
+
+  it("can preserve leaked plain-text tool-call drafts for internal UI surfaces", () => {
+    const leaked =
+      "Quick check first. +#+#+#+#+assistant to=multi_tool_use.parallel\n" +
+      '{"tool_uses":[{"recipient_name":"functions.exec","parameters":{"command":"pwd"}}]}';
+    expect(
+      sanitizeUserFacingText(leaked, {
+        stripFailedToolCallDraft: false,
+      }),
+    ).toContain("assistant to=multi_tool_use.parallel");
+  });
+
+  it("can preserve leaked browser-tool drafts for internal UI surfaces", () => {
+    const leaked =
+      "Found it. I’m entering the newest code and submitting now. +#+#+#+#+assistant to=functions.browser մեկնաբանություն ppjson\n" +
+      '{"action":"act","target":"host","targetId":"2879529FB8891C7A057C32D61626AA0B","request":{"kind":"type","ref":"e3","text":"433848"}}';
+    expect(
+      sanitizeUserFacingText(leaked, {
+        stripFailedToolCallDraft: false,
+      }),
+    ).toContain("assistant to=functions.browser");
+  });
+
+  it("does not clobber normal numeric prefixes", () => {
+    expect(sanitizeUserFacingText("202 results found")).toBe("202 results found");
+    expect(sanitizeUserFacingText("400 days left")).toBe("400 days left");
+  });
 
   it("sanitizes role ordering errors", () => {
     const result = sanitizeUserFacingText("400 Incorrect role information", { errorContext: true });

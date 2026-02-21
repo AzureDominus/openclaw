@@ -141,6 +141,27 @@ describe("normalizeReplyPayload", () => {
     expect(reasons).toEqual(["silent"]);
   });
 
+  it("strips leaked browser tool-call drafts by default", () => {
+    const normalized = normalizeReplyPayload({
+      text:
+        "Found it. I’m entering the newest code and submitting now. +#+#+#+#+assistant to=functions.browser մեկնաբանություն ppjson\n" +
+        '{"action":"act","target":"host","targetId":"2879529FB8891C7A057C32D61626AA0B","request":{"kind":"type","ref":"e3","text":"433848"}}',
+    });
+    expect(normalized?.text).toBe("Found it. I’m entering the newest code and submitting now.");
+  });
+
+  it("can preserve leaked plain-text tool-call drafts when explicitly disabled", () => {
+    const normalized = normalizeReplyPayload(
+      {
+        text: 'Working on it. +#+#+#+#+assistant to=functions.exec\n{"command":"pwd","workdir":"/tmp"}',
+      },
+      {
+        stripFailedToolCallDraft: false,
+      },
+    );
+    expect(normalized?.text).toContain("assistant to=functions.exec");
+  });
+
   it("strips NO_REPLY but keeps media payload", () => {
     const result = normalizeReplyPayload({
       text: "NO_REPLY",
@@ -149,6 +170,20 @@ describe("normalizeReplyPayload", () => {
     expect(result).not.toBeNull();
     expect(result!.text).toBe("");
     expect(result!.mediaUrl).toBe("https://example.com/img.png");
+  });
+
+  it("can preserve leaked browser drafts when explicitly disabled", () => {
+    const normalized = normalizeReplyPayload(
+      {
+        text:
+          "Found it. I’m entering the newest code and submitting now. +#+#+#+#+assistant to=functions.browser մեկնաբանություն ppjson\n" +
+          '{"action":"act","target":"host","targetId":"2879529FB8891C7A057C32D61626AA0B","request":{"kind":"type","ref":"e3","text":"433848"}}',
+      },
+      {
+        stripFailedToolCallDraft: false,
+      },
+    );
+    expect(normalized?.text).toContain("assistant to=functions.browser");
   });
 });
 
