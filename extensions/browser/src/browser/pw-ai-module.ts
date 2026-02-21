@@ -4,8 +4,10 @@ export type PwAiModule = typeof import("./pw-ai.js");
 
 type PwAiLoadMode = "soft" | "strict";
 
-let pwAiModuleSoft: Promise<PwAiModule | null> | null = null;
-let pwAiModuleStrict: Promise<PwAiModule | null> | null = null;
+let cachedPwAiModule: PwAiModule | null = null;
+let pwAiModuleSoftInflight: Promise<PwAiModule | null> | null = null;
+let pwAiModuleStrictInflight: Promise<PwAiModule | null> | null = null;
+let pwAiModuleLoader: () => Promise<PwAiModule> = async () => await import("./pw-ai.js");
 
 function isModuleNotFoundError(err: unknown): boolean {
   const code = extractErrorCode(err);
@@ -24,7 +26,7 @@ function isModuleNotFoundError(err: unknown): boolean {
 
 async function loadPwAiModule(mode: PwAiLoadMode): Promise<PwAiModule | null> {
   try {
-    return await import("./pw-ai.js");
+    return await pwAiModuleLoader();
   } catch (err) {
     if (mode === "soft") {
       return null;
@@ -37,15 +39,53 @@ async function loadPwAiModule(mode: PwAiLoadMode): Promise<PwAiModule | null> {
 }
 
 export async function getPwAiModule(opts?: { mode?: PwAiLoadMode }): Promise<PwAiModule | null> {
+  if (cachedPwAiModule) {
+    return cachedPwAiModule;
+  }
+
   const mode: PwAiLoadMode = opts?.mode ?? "soft";
   if (mode === "soft") {
-    if (!pwAiModuleSoft) {
-      pwAiModuleSoft = loadPwAiModule("soft");
+    if (!pwAiModuleSoftInflight) {
+      pwAiModuleSoftInflight = loadPwAiModule("soft")
+        .then((mod) => {
+          if (mod) {
+            cachedPwAiModule = mod;
+          }
+          return mod;
+        })
+        .finally(() => {
+          pwAiModuleSoftInflight = null;
+        });
     }
-    return await pwAiModuleSoft;
+    return await pwAiModuleSoftInflight;
   }
-  if (!pwAiModuleStrict) {
-    pwAiModuleStrict = loadPwAiModule("strict");
+  if (!pwAiModuleStrictInflight) {
+    pwAiModuleStrictInflight = loadPwAiModule("strict")
+      .then((mod) => {
+        if (mod) {
+          cachedPwAiModule = mod;
+        }
+        return mod;
+      })
+      .finally(() => {
+        pwAiModuleStrictInflight = null;
+      });
   }
-  return await pwAiModuleStrict;
+  return await pwAiModuleStrictInflight;
 }
+
+function resetPwAiModuleState() {
+  cachedPwAiModule = null;
+  pwAiModuleSoftInflight = null;
+  pwAiModuleStrictInflight = null;
+}
+
+export const __test = {
+  setLoader(loader: () => Promise<PwAiModule>) {
+    pwAiModuleLoader = loader;
+  },
+  reset() {
+    resetPwAiModuleState();
+    pwAiModuleLoader = async () => await import("./pw-ai.js");
+  },
+};
