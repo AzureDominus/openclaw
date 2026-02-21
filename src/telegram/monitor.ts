@@ -1,12 +1,12 @@
 import { type RunOptions, run } from "@grammyjs/runner";
-import { resolveAgentMaxConcurrent } from "../config/agent-limits.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { RuntimeEnv } from "../runtime.js";
+import { resolveAgentMaxConcurrent } from "../config/agent-limits.js";
 import { loadConfig } from "../config/config.js";
 import { computeBackoff, sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { formatDurationPrecise } from "../infra/format-time/format-duration.ts";
 import { registerUnhandledRejectionHandler } from "../infra/unhandled-rejections.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
@@ -45,8 +45,9 @@ export function createTelegramRunnerOptions(cfg: OpenClawConfig): RunOptions<unk
       },
       // Suppress grammY getUpdates stack traces; we log concise errors ourselves.
       silent: true,
-      // Retry transient failures for a limited window before surfacing errors.
-      maxRetryTime: 5 * 60 * 1000,
+      // Fail fast so monitorTelegramProvider can restart/log promptly.
+      // A long internal retry window can make restarts look "down" for minutes.
+      maxRetryTime: 30_000,
       retryInterval: "exponential",
     },
   };

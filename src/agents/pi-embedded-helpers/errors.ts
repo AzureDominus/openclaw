@@ -1,9 +1,9 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { FailoverReason } from "./types.js";
 import { formatSandboxToolPolicyBlockedMessage } from "../sandbox.js";
 import { stableStringify } from "../stable-stringify.js";
-import type { FailoverReason } from "./types.js";
 
 const log = createSubsystemLogger("errors");
 
@@ -155,6 +155,10 @@ export function isCompactionFailureError(errorMessage?: string): boolean {
 const ERROR_PAYLOAD_PREFIX_RE =
   /^(?:error|api\s*error|apierror|openai\s*error|anthropic\s*error|gateway\s*error)[:\s-]+/i;
 const FINAL_TAG_RE = /<\s*\/?\s*final\s*>/gi;
+const FAILED_TOOL_CALL_DRAFT_MARKER_RE =
+  /(?:[+#]{4,}\s*)?assistant\s+to=(?:functions\.[a-zA-Z0-9_]+|multi_tool_use\.parallel)\b/i;
+const FAILED_TOOL_CALL_DRAFT_HINT_RE =
+  /(?:^\s*```(?:json)?\s*$)|(?:^\s*[{[]\s*$)|(?:"(?:command|tool_uses|parameters)"\s*:)/im;
 const ERROR_PREFIX_RE =
   /^(?:error|api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|request failed|failed|exception)[:\s-]+/i;
 const CONTEXT_OVERFLOW_ERROR_HEAD_RE =
@@ -235,6 +239,28 @@ function stripFinalTagsFromText(text: string): string {
     return text;
   }
   return text.replace(FINAL_TAG_RE, "");
+}
+
+function stripFailedToolCallDraftFromText(text: string): string {
+  if (!text || !FAILED_TOOL_CALL_DRAFT_MARKER_RE.test(text)) {
+    return text;
+  }
+  const marker = FAILED_TOOL_CALL_DRAFT_MARKER_RE.exec(text);
+  if (!marker || marker.index == null) {
+    return text;
+  }
+  const markerIndex = marker.index;
+  const tail = text.slice(markerIndex);
+  if (!FAILED_TOOL_CALL_DRAFT_HINT_RE.test(tail)) {
+    return text;
+  }
+  // Keep valid prose before the leak; strip from the leaked `+#+#+#+#+...assistant to=...` tail.
+  const prefix = /[+#]{4,}\s*$/.exec(text.slice(0, markerIndex));
+  const stripStart = prefix ? markerIndex - prefix[0].length : markerIndex;
+  return text
+    .slice(0, stripStart)
+    .replace(/[ \t]+\r?\n/g, "\n")
+    .trimEnd();
 }
 
 function collapseConsecutiveDuplicateBlocks(text: string): string {
@@ -549,12 +575,19 @@ export function formatAssistantErrorText(
   return raw.length > 600 ? `${raw.slice(0, 600)}…` : raw;
 }
 
-export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boolean }): string {
+export function sanitizeUserFacingText(
+  text: string,
+  opts?: { errorContext?: boolean; stripFailedToolCallDraft?: boolean },
+): string {
   if (!text) {
     return text;
   }
   const errorContext = opts?.errorContext ?? false;
-  const stripped = stripFinalTagsFromText(text);
+  const stripFailedToolCallDraft = opts?.stripFailedToolCallDraft ?? true;
+  const strippedFinalTags = stripFinalTagsFromText(text);
+  const stripped = stripFailedToolCallDraft
+    ? stripFailedToolCallDraftFromText(strippedFinalTags)
+    : strippedFinalTags;
   const trimmed = stripped.trim();
   if (!trimmed) {
     return "";

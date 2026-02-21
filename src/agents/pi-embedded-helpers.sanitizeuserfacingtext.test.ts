@@ -14,12 +14,28 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText("Hi <final>there</final>!")).toBe("Hi there!");
   });
 
-  it.each(["202 results found", "400 days left"])(
-    "does not clobber normal numeric prefix: %s",
-    (text) => {
-      expect(sanitizeUserFacingText(text)).toBe(text);
-    },
-  );
+  it("strips leaked plain-text tool-call drafts from user-facing text", () => {
+    const leaked =
+      "Quick check first. +#+#+#+#+assistant to=functions.exec\n" +
+      '{"command":"pwd","workdir":"/tmp"}';
+    expect(sanitizeUserFacingText(leaked)).toBe("Quick check first.");
+  });
+
+  it("can preserve leaked plain-text tool-call drafts for internal UI surfaces", () => {
+    const leaked =
+      "Quick check first. +#+#+#+#+assistant to=multi_tool_use.parallel\n" +
+      '{"tool_uses":[{"recipient_name":"functions.exec","parameters":{"command":"pwd"}}]}';
+    expect(
+      sanitizeUserFacingText(leaked, {
+        stripFailedToolCallDraft: false,
+      }),
+    ).toContain("assistant to=multi_tool_use.parallel");
+  });
+
+  it("does not clobber normal numeric prefixes", () => {
+    expect(sanitizeUserFacingText("202 results found")).toBe("202 results found");
+    expect(sanitizeUserFacingText("400 days left")).toBe("400 days left");
+  });
 
   it("sanitizes role ordering errors", () => {
     const result = sanitizeUserFacingText("400 Incorrect role information", { errorContext: true });

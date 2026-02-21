@@ -54,4 +54,33 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(onBlockReply).toHaveBeenCalledTimes(1);
     expect(subscription.assistantTexts).toEqual(["Hello block"]);
   });
+
+  it("emits a message_end fallback block reply when non-streaming providers send no text events", () => {
+    const onBlockReply = vi.fn();
+    const { emit, subscription } = createTextEndBlockReplyHarness({ onBlockReply });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Non-streaming fallback update" }],
+      } as AssistantMessage,
+    });
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(onBlockReply.mock.calls[0]?.[0]?.text).toBe("Non-streaming fallback update");
+    expect(subscription.assistantTexts).toEqual(["Non-streaming fallback update"]);
+
+    // Repeated message_end events should not duplicate block replies.
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Non-streaming fallback update" }],
+      } as AssistantMessage,
+    });
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(subscription.assistantTexts).toEqual(["Non-streaming fallback update"]);
+  });
 });

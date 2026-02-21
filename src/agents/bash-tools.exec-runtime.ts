@@ -143,6 +143,9 @@ export type ExecProcessOutcome = {
   exitSignal: NodeJS.Signals | number | null;
   durationMs: number;
   aggregated: string;
+  truncated?: boolean;
+  totalOutputChars?: number;
+  outputCapChars?: number;
   timedOut: boolean;
   reason?: string;
 };
@@ -154,6 +157,13 @@ export type ExecProcessHandle = {
   promise: Promise<ExecProcessOutcome>;
   kill: () => void;
 };
+
+export function isExecOutputCapTruncated(params: {
+  totalOutputChars: number;
+  outputCapChars: number;
+}) {
+  return params.totalOutputChars > params.outputCapChars;
+}
 
 export function normalizeExecHost(value?: string | null): ExecHost | null {
   const normalized = value?.trim().toLowerCase();
@@ -515,12 +525,19 @@ export async function runExecProcess(opts: {
       const aggregated = session.aggregated.trim();
       if (status === "completed") {
         const exitMsg = exitCode !== 0 ? `\n\n(Command exited with code ${exitCode})` : "";
+        const truncated = isExecOutputCapTruncated({
+          totalOutputChars: session.totalOutputChars,
+          outputCapChars: opts.maxOutput,
+        });
         return {
           status: "completed",
           exitCode,
           exitSignal: exit.exitSignal,
           durationMs,
           aggregated: aggregated + exitMsg,
+          truncated,
+          totalOutputChars: session.totalOutputChars,
+          outputCapChars: opts.maxOutput,
           timedOut: false,
         };
       }
@@ -537,12 +554,19 @@ export async function runExecProcess(opts: {
             : exit.exitSignal != null
               ? `Command aborted by signal ${exit.exitSignal}`
               : "Command aborted before exit code was captured";
+      const truncated = isExecOutputCapTruncated({
+        totalOutputChars: session.totalOutputChars,
+        outputCapChars: opts.maxOutput,
+      });
       return {
         status: "failed",
         exitCode: exit.exitCode,
         exitSignal: exit.exitSignal,
         durationMs,
         aggregated,
+        truncated,
+        totalOutputChars: session.totalOutputChars,
+        outputCapChars: opts.maxOutput,
         timedOut: exit.timedOut,
         reason: aggregated ? `${aggregated}\n\n${reason}` : reason,
       };
@@ -552,12 +576,19 @@ export async function runExecProcess(opts: {
       maybeNotifyOnExit(session, "failed");
       const aggregated = session.aggregated.trim();
       const message = aggregated ? `${aggregated}\n\n${String(err)}` : String(err);
+      const truncated = isExecOutputCapTruncated({
+        totalOutputChars: session.totalOutputChars,
+        outputCapChars: opts.maxOutput,
+      });
       return {
         status: "failed",
         exitCode: null,
         exitSignal: null,
         durationMs: Date.now() - startedAt,
         aggregated,
+        truncated,
+        totalOutputChars: session.totalOutputChars,
+        outputCapChars: opts.maxOutput,
         timedOut: false,
         reason: message,
       };

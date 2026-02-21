@@ -22,6 +22,7 @@ import {
   normalizeExecHost,
   normalizeExecSecurity,
   normalizePathPrepend,
+  isExecOutputCapTruncated,
   renderExecHostLabel,
   resolveApprovalRunningNoticeMs,
   runExecProcess,
@@ -148,6 +149,26 @@ async function validateScriptFileForShellBleed(params: {
   }
 }
 
+function formatTruncationNotice(params: {
+  truncated: boolean;
+  outputCapChars: number;
+  totalOutputChars: number;
+}) {
+  const wasOutputCapTruncated =
+    params.truncated &&
+    isExecOutputCapTruncated({
+      totalOutputChars: params.totalOutputChars,
+      outputCapChars: params.outputCapChars,
+    });
+  if (!wasOutputCapTruncated) {
+    return "";
+  }
+  const visibleChars = Math.min(params.outputCapChars, params.totalOutputChars);
+  return (
+    `\n\n[exec output truncated: showing last ${visibleChars} chars` +
+    ` of ${params.totalOutputChars} captured]`
+  );
+}
 export function createExecTool(
   defaults?: ExecToolDefaults,
   // oxlint-disable-next-line typescript/no-explicit-any
@@ -556,11 +577,16 @@ export function createExecTool(
               reject(new Error(outcome.reason ?? "Command failed."));
               return;
             }
+            const truncationNotice = formatTruncationNotice({
+              truncated: outcome.truncated ?? false,
+              outputCapChars: outcome.outputCapChars ?? maxOutput,
+              totalOutputChars: outcome.totalOutputChars ?? outcome.aggregated.length,
+            });
             resolve({
               content: [
                 {
                   type: "text",
-                  text: `${getWarningText()}${outcome.aggregated || "(no output)"}`,
+                  text: `${getWarningText()}${outcome.aggregated || "(no output)"}${truncationNotice}`,
                 },
               ],
               details: {
@@ -568,6 +594,9 @@ export function createExecTool(
                 exitCode: outcome.exitCode ?? 0,
                 durationMs: outcome.durationMs,
                 aggregated: outcome.aggregated,
+                truncated: outcome.truncated ?? false,
+                totalOutputChars: outcome.totalOutputChars,
+                outputCapChars: outcome.outputCapChars,
                 cwd: run.session.cwd,
               },
             });
