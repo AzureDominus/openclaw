@@ -57,6 +57,8 @@ export type ReplyDispatcherOptions = {
   humanDelay?: HumanDelayConfig;
   /** Strip OPENCLAW_STOP_REASON marker lines before delivery. */
   stripStopReasonMarker?: boolean;
+  /** Strip leaked plain-text tool-call drafts before delivery. */
+  stripFailedToolCallDraft?: boolean;
 };
 
 export type ReplyDispatcherWithTypingOptions = Omit<ReplyDispatcherOptions, "onIdle"> & {
@@ -88,6 +90,7 @@ type NormalizeReplyPayloadInternalOptions = Pick<
   | "responsePrefixContextProvider"
   | "onHeartbeatStrip"
   | "stripStopReasonMarker"
+  | "stripFailedToolCallDraft"
 > & {
   onSkip?: (reason: NormalizeReplySkipReason) => void;
 };
@@ -103,6 +106,7 @@ function normalizeReplyPayloadInternal(
     responsePrefix: opts.responsePrefix,
     responsePrefixContext: prefixContext,
     onHeartbeatStrip: opts.onHeartbeatStrip,
+    stripFailedToolCallDraft: opts.stripFailedToolCallDraft,
     onSkip: opts.onSkip,
   });
   if (!normalized) {
@@ -143,6 +147,7 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
       responsePrefixContextProvider: options.responsePrefixContextProvider,
       onHeartbeatStrip: options.onHeartbeatStrip,
       stripStopReasonMarker: options.stripStopReasonMarker,
+      stripFailedToolCallDraft: options.stripFailedToolCallDraft,
       onSkip: (reason) => options.onSkip?.(payload, { kind, reason }),
     });
     if (!normalized) {

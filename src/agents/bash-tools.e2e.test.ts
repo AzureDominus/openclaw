@@ -2,6 +2,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
 import { getFinishedSession, resetProcessRegistryForTests } from "./bash-process-registry.js";
+import { DEFAULT_MAX_OUTPUT, DEFAULT_PENDING_MAX_OUTPUT } from "./bash-tools.exec-runtime.js";
 import { createExecTool, createProcessTool, execTool, processTool } from "./bash-tools.js";
 import { buildDockerExecArgs } from "./bash-tools.shared.js";
 import { resolveShellFromPath, sanitizeBinaryOutput } from "./shell-utils.js";
@@ -349,6 +350,31 @@ describe("exec exit codes", () => {
     const text = result.content.find((c) => c.type === "text")?.text ?? "";
     expect(text).toContain("[exec output truncated: showing last 40000 chars of");
   });
+
+  it.runIf(DEFAULT_PENDING_MAX_OUTPUT + 1_000 < DEFAULT_MAX_OUTPUT)(
+    "does not mark output as truncated when only the pending poll buffer is capped",
+    async () => {
+      const outputChars = DEFAULT_PENDING_MAX_OUTPUT + 1_000;
+      const command = isWin
+        ? `node -e "process.stdout.write('x'.repeat(${outputChars}))"`
+        : `node -e 'process.stdout.write("x".repeat(${outputChars}))'`;
+      const result = await execTool.execute("call-pending-cap", { command });
+      const details = result.details as {
+        status?: string;
+        truncated?: boolean;
+        totalOutputChars?: number;
+        outputCapChars?: number;
+      };
+
+      expect(details.status).toBe("completed");
+      expect(details.totalOutputChars).toBe(outputChars);
+      expect((details.outputCapChars ?? 0) > outputChars).toBe(true);
+      expect(details.truncated).toBe(false);
+
+      const text = result.content.find((c) => c.type === "text")?.text ?? "";
+      expect(text).not.toContain("[exec output truncated:");
+    },
+  );
 });
 
 describe("exec notifyOnExit", () => {

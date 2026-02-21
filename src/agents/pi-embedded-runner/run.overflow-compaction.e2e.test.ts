@@ -452,6 +452,39 @@ describe("overflow compaction in run loop", () => {
     );
   });
 
+  it("surfaces a user-facing notice when continue guard hits MAX_ATTEMPTS", async () => {
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: ["Checking step 1."],
+          lastAssistant: { stopReason: "end_turn" } as EmbeddedRunAttemptResult["lastAssistant"],
+          toolMetas: [],
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: ["Checking step 2."],
+          lastAssistant: { stopReason: "end_turn" } as EmbeddedRunAttemptResult["lastAssistant"],
+          toolMetas: [],
+        }),
+      );
+
+    const result = await runEmbeddedPiAgent({
+      ...baseParams,
+      config: {
+        agents: {
+          defaults: {
+            continueGuardRetries: 1,
+          },
+        },
+      },
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.payloads?.[0]?.text).toContain("MAX_ATTEMPTS (1)");
+    expect(result.payloads?.[0]?.text).toContain("did not acknowledge completion");
+  });
+
   it("uses configured continue guard retry cap from agents.defaults", async () => {
     mockedRunEmbeddedAttempt
       .mockResolvedValueOnce(
@@ -589,6 +622,32 @@ describe("overflow compaction in run loop", () => {
     expect(mockedRunEmbeddedAttempt.mock.calls[1]?.[0]?.prompt ?? "").toContain(
       "Do not write tool calls as plain text",
     );
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("invalid plain-text tool call"));
+    expect(result.meta.stopReasonDetail).toBe("completed");
+  });
+
+  it("retries with continue guard for leaked +prefixed multi_tool_use plain-text drafts", async () => {
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: [
+            'Progress.\n+#+#+#+#+assistant to=multi_tool_use.parallel\n{"tool_uses":[{"recipient_name":"functions.exec"}]}',
+          ],
+          lastAssistant: { stopReason: "end_turn" } as EmbeddedRunAttemptResult["lastAssistant"],
+          toolMetas: [],
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: ["Done.\nOPENCLAW_STOP_REASON: completed"],
+          lastAssistant: { stopReason: "end_turn" } as EmbeddedRunAttemptResult["lastAssistant"],
+          toolMetas: [],
+        }),
+      );
+
+    const result = await runEmbeddedPiAgent(baseParams);
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("invalid plain-text tool call"));
     expect(result.meta.stopReasonDetail).toBe("completed");
   });

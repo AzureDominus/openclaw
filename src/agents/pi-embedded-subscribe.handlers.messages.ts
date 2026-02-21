@@ -355,9 +355,16 @@ export function handleMessageEnd(
     maybeEmitReasoning();
   }
 
+  const hasPendingBlockBuffer = ctx.blockChunker
+    ? ctx.blockChunker.hasBuffered()
+    : ctx.state.blockBuffer.length > 0;
+  const shouldEmitMessageEndFallbackBlock =
+    ctx.state.blockReplyBreak === "text_end" && !addedDuringMessage;
+
   if (
     (ctx.state.blockReplyBreak === "message_end" ||
-      (ctx.blockChunker ? ctx.blockChunker.hasBuffered() : ctx.state.blockBuffer.length > 0)) &&
+      hasPendingBlockBuffer ||
+      shouldEmitMessageEndFallbackBlock) &&
     text &&
     onBlockReply
   ) {

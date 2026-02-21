@@ -114,6 +114,25 @@ describe("normalizeReplyPayload", () => {
     expect(normalized).toBeNull();
     expect(reasons).toEqual(["empty"]);
   });
+
+  it("strips leaked plain-text tool-call drafts by default", () => {
+    const normalized = normalizeReplyPayload({
+      text: 'Working on it. +#+#+#+#+assistant to=functions.exec\n{"command":"pwd","workdir":"/tmp"}',
+    });
+    expect(normalized?.text).toBe("Working on it.");
+  });
+
+  it("can preserve leaked plain-text tool-call drafts when explicitly disabled", () => {
+    const normalized = normalizeReplyPayload(
+      {
+        text: 'Working on it. +#+#+#+#+assistant to=functions.exec\n{"command":"pwd","workdir":"/tmp"}',
+      },
+      {
+        stripFailedToolCallDraft: false,
+      },
+    );
+    expect(normalized?.text).toContain("assistant to=functions.exec");
+  });
 });
 
 describe("typing controller", () => {
