@@ -870,6 +870,8 @@ Required:
 Options:
 
 - `--mode <now|next-heartbeat>`
+- `--agent <agentId>`
+- `--session-key <sessionKey>`
 - `--json`
 - `--url`, `--token`, `--timeout`, `--expect-final`
 

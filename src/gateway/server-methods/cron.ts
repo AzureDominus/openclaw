@@ -1,6 +1,7 @@
+import type { CronJobCreate, CronJobPatch } from "../../cron/types.js";
+import type { GatewayRequestHandlers } from "./types.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import { readCronRunLogEntries, resolveCronRunLogPath } from "../../cron/run-log.js";
-import type { CronJobCreate, CronJobPatch } from "../../cron/types.js";
 import { validateScheduleTimestamp } from "../../cron/validate-timestamp.js";
 import {
   ErrorCodes,
@@ -15,7 +16,6 @@ import {
   validateCronUpdateParams,
   validateWakeParams,
 } from "../protocol/index.js";
-import type { GatewayRequestHandlers } from "./types.js";
 
 export const cronHandlers: GatewayRequestHandlers = {
   wake: ({ params, respond, context }) => {
@@ -33,8 +33,15 @@ export const cronHandlers: GatewayRequestHandlers = {
     const p = params as {
       mode: "now" | "next-heartbeat";
       text: string;
+      agentId?: string;
+      sessionKey?: string;
     };
-    const result = context.cron.wake({ mode: p.mode, text: p.text });
+    const result = context.cron.wake({
+      mode: p.mode,
+      text: p.text,
+      agentId: p.agentId,
+      sessionKey: p.sessionKey,
+    });
     respond(true, result, undefined);
   },
   "cron.list": async ({ params, respond, context }) => {
