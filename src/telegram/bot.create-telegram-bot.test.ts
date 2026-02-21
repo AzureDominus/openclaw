@@ -125,7 +125,7 @@ describe("createTelegramBot", () => {
     expect(sequentializeKey).toBe(getTelegramSequentialKey);
     expect(
       getTelegramSequentialKey({ message: mockMessage({ chat: mockChat({ id: 123 }) }) }),
-    ).toBe("telegram:123");
+    ).toBe("telegram:123:msg:1");
     expect(
       getTelegramSequentialKey({
         message: mockMessage({
@@ -133,7 +133,7 @@ describe("createTelegramBot", () => {
           message_thread_id: 9,
         }),
       }),
-    ).toBe("telegram:123:topic:9");
+    ).toBe("telegram:123:topic:9:msg:1");
     expect(
       getTelegramSequentialKey({
         message: mockMessage({
@@ -141,29 +141,29 @@ describe("createTelegramBot", () => {
           message_thread_id: 9,
         }),
       }),
-    ).toBe("telegram:123");
+    ).toBe("telegram:123:msg:1");
     expect(
       getTelegramSequentialKey({
         message: mockMessage({ chat: mockChat({ id: 123, type: "supergroup", is_forum: true }) }),
       }),
-    ).toBe("telegram:123:topic:1");
+    ).toBe("telegram:123:topic:1:msg:1");
     expect(
       getTelegramSequentialKey({
         update: { message: mockMessage({ chat: mockChat({ id: 555 }) }) },
       }),
-    ).toBe("telegram:555");
+    ).toBe("telegram:555:msg:1");
     expect(
       getTelegramSequentialKey({
         channelPost: mockMessage({ chat: mockChat({ id: -100777111222, type: "channel" }) }),
       }),
-    ).toBe("telegram:-100777111222");
+    ).toBe("telegram:-100777111222:msg:1");
     expect(
       getTelegramSequentialKey({
         update: {
           channel_post: mockMessage({ chat: mockChat({ id: -100777111223, type: "channel" }) }),
         },
       }),
-    ).toBe("telegram:-100777111223");
+    ).toBe("telegram:-100777111223:msg:1");
     expect(
       getTelegramSequentialKey({
         message: mockMessage({ chat: mockChat({ id: 123 }), text: "/stop" }),
@@ -173,7 +173,7 @@ describe("createTelegramBot", () => {
       getTelegramSequentialKey({
         message: mockMessage({ chat: mockChat({ id: 123 }), text: "/status" }),
       }),
-    ).toBe("telegram:123");
+    ).toBe("telegram:123:msg:1");
     expect(
       getTelegramSequentialKey({
         message: mockMessage({ chat: mockChat({ id: 123 }), text: "stop" }),
@@ -203,17 +203,26 @@ describe("createTelegramBot", () => {
       getTelegramSequentialKey({
         message: mockMessage({ chat: mockChat({ id: 123 }), text: "/abort" }),
       }),
-    ).toBe("telegram:123");
+    ).toBe("telegram:123:msg:1");
     expect(
       getTelegramSequentialKey({
         message: mockMessage({ chat: mockChat({ id: 123 }), text: "/abort now" }),
       }),
-    ).toBe("telegram:123");
+    ).toBe("telegram:123:msg:1");
     expect(
       getTelegramSequentialKey({
         message: mockMessage({ chat: mockChat({ id: 123 }), text: "please do not do that" }),
       }),
-    ).toBe("telegram:123");
+    ).toBe("telegram:123:msg:1");
+    expect(
+      getTelegramSequentialKey({
+        message: mockMessage({
+          chat: mockChat({ id: 123 }),
+          message_id: 2,
+          text: "follow-up",
+        }),
+      }),
+    ).toBe("telegram:123:msg:2");
   });
   it("routes callback_query payloads as messages and answers callbacks", async () => {
     createTelegramBot({ token: "tok" });

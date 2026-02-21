@@ -93,6 +93,7 @@ export function getTelegramSequentialKey(ctx: {
     ctx.update?.edited_channel_post ??
     ctx.update?.callback_query?.message;
   const chatId = msg?.chat?.id ?? ctx.chat?.id;
+  const messageId = msg?.message_id;
   const rawText = msg?.text ?? msg?.caption;
   const botUsername = ctx.me?.username;
   if (isAbortRequestText(rawText, botUsername ? { botUsername } : undefined)) {
@@ -108,7 +109,9 @@ export function getTelegramSequentialKey(ctx: {
     ? resolveTelegramForumThreadId({ isForum, messageThreadId })
     : messageThreadId;
   if (typeof chatId === "number") {
-    return threadId != null ? `telegram:${chatId}:topic:${threadId}` : `telegram:${chatId}`;
+    const baseKey =
+      threadId != null ? `telegram:${chatId}:topic:${threadId}` : `telegram:${chatId}`;
+    return typeof messageId === "number" ? `${baseKey}:msg:${messageId}` : baseKey;
   }
   return "telegram:unknown";
 }

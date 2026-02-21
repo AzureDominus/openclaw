@@ -226,6 +226,7 @@ function buildContinueGuardPrompt(attempt: number, maxRetries: number): string {
     "Your previous assistant turn ended without calling a tool and without a valid OPENCLAW_STOP_REASON tag.",
     "Your previous user-facing message was already delivered to the user.",
     "Do not repeat or rephrase that prior message.",
+    "Keep sending brief progress updates between tool bursts, as instructed in your system prompt.",
     "Do not write tool calls as plain text (for example: assistant to=functions.exec ...).",
     "If another tool call is needed, call the tool directly using a structured tool call.",
     "If you are done, respond with ONLY: OPENCLAW_STOP_REASON: completed",
