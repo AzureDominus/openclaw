@@ -6,6 +6,7 @@ import {
   convertMarkdownTables,
   resolveMarkdownTableMode,
 } from "openclaw/plugin-sdk/markdown-table-runtime";
+import { isLikelyBrowserScreenshotMediaUrl } from "openclaw/plugin-sdk/media-runtime";
 import { normalizePollInput, type PollInput } from "openclaw/plugin-sdk/poll-runtime";
 import { createSubsystemLogger, getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -24,6 +25,20 @@ import { loadOutboundMediaFromUrl } from "./outbound-media.runtime.js";
 import { markdownToWhatsApp, toWhatsappJid } from "./text-runtime.js";
 
 const outboundLog = createSubsystemLogger("gateway/channels/whatsapp").child("outbound");
+
+function shouldSendWhatsAppImageAsDocument(params: {
+  mode?: "image" | "document" | "auto";
+  mediaUrl?: string;
+}): boolean {
+  const mode = params.mode ?? "image";
+  if (mode === "document") {
+    return true;
+  }
+  if (mode === "image") {
+    return false;
+  }
+  return isLikelyBrowserScreenshotMediaUrl(params.mediaUrl);
+}
 
 function resolveOutboundWhatsAppAccountId(params: {
   cfg: OpenClawConfig;
@@ -115,6 +130,7 @@ export async function sendMessageWhatsApp(
     let mediaBuffer: Buffer | undefined;
     let mediaType: string | undefined;
     let documentFileName: string | undefined;
+    let sendImageAsDocument = false;
     let visibleTextAfterVoice: string | undefined;
     if (primaryMediaUrl) {
       const media = await prepareWhatsAppOutboundMedia(
@@ -135,6 +151,15 @@ export async function sendMessageWhatsApp(
       } else if (media.kind === "document") {
         text = caption ?? "";
         documentFileName = media.fileName;
+      } else if (media.kind === "image") {
+        text = caption ?? "";
+        sendImageAsDocument = shouldSendWhatsAppImageAsDocument({
+          mode: account.imageUploadMode,
+          mediaUrl: primaryMediaUrl,
+        });
+        if (sendImageAsDocument) {
+          documentFileName = media.fileName;
+        }
       } else {
         text = caption ?? "";
       }
@@ -145,10 +170,15 @@ export async function sendMessageWhatsApp(
     const hasExplicitAccountId = Boolean(options.accountId?.trim());
     const accountId = hasExplicitAccountId ? resolvedAccountId : undefined;
     const sendOptions: ActiveWebSendOptions | undefined =
-      options.gifPlayback || accountId || documentFileName || options.quotedMessageKey
+      options.gifPlayback ||
+      accountId ||
+      documentFileName ||
+      sendImageAsDocument ||
+      options.quotedMessageKey
         ? {
             ...(options.gifPlayback ? { gifPlayback: true } : {}),
             ...(documentFileName ? { fileName: documentFileName } : {}),
+            ...(sendImageAsDocument ? { sendImageAsDocument: true } : {}),
             ...(options.quotedMessageKey ? { quotedMessageKey: options.quotedMessageKey } : {}),
             accountId,
           }

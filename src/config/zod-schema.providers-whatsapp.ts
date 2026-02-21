@@ -73,6 +73,8 @@ function buildWhatsAppCommonShape(params: { useDefaults: boolean }) {
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
     textChunkLimit: z.number().int().positive().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
+    mediaMaxMb: z.number().int().positive().optional(),
+    imageUploadMode: z.enum(["image", "document", "auto"]).optional(),
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     groups: WhatsAppGroupsSchema,
@@ -137,7 +139,6 @@ export const WhatsAppAccountSchema = z
     enabled: z.boolean().optional(),
     /** Override auth directory for this WhatsApp account (Baileys multi-file auth state). */
     authDir: z.string().optional(),
-    mediaMaxMb: z.number().int().positive().optional(),
   })
   .strict();
 
@@ -146,7 +147,6 @@ export const WhatsAppConfigSchema = z
     ...buildWhatsAppCommonShape({ useDefaults: true }),
     accounts: z.record(z.string(), WhatsAppAccountSchema.optional()).optional(),
     defaultAccount: z.string().optional(),
-    mediaMaxMb: z.number().int().positive().optional().default(50),
     actions: z
       .object({
         reactions: z.boolean().optional(),

@@ -30,6 +30,7 @@ import {
 import {
   buildOutboundMediaLoadOptions,
   getImageMetadata,
+  isLikelyBrowserScreenshotMediaUrl,
   isGifMedia,
   kindFromMime,
   loadWebMedia,
@@ -63,6 +64,9 @@ type TelegramThreadScopedParams = {
 const InputFileCtor = grammy.InputFile;
 const MAX_TELEGRAM_PHOTO_DIMENSION_SUM = 10_000;
 const MAX_TELEGRAM_PHOTO_ASPECT_RATIO = 20;
+const TELEGRAM_PHOTO_MAX_BYTES = 10 * 1024 * 1024;
+const TELEGRAM_BROWSER_SCREENSHOT_DOC_MAX_SIDE = 3000;
+const TELEGRAM_BROWSER_SCREENSHOT_DOC_MAX_PIXELS = 5_000_000;
 
 type TelegramSendOpts = {
   cfg: OpenClawConfig;
@@ -740,15 +744,43 @@ export async function sendMessageTelegram(
   const sendChunkedText = async (rawText: string, context: string) =>
     await sendTelegramTextChunks(buildChunkedTextPlan(rawText, context), context);
 
-  async function shouldSendTelegramImageAsPhoto(buffer: Buffer): Promise<boolean> {
+  async function shouldSendTelegramImageAsPhoto(params: {
+    buffer: Buffer;
+    mediaUrl?: string;
+    mode?: "photo" | "auto" | "document";
+  }): Promise<boolean> {
+    const mode = params.mode ?? "auto";
+    if (mode === "document") {
+      return false;
+    }
+    if (mode === "photo") {
+      return true;
+    }
+    if (params.buffer.byteLength > TELEGRAM_PHOTO_MAX_BYTES) {
+      sendLogger.warn("Photo exceeds Telegram photo size limit. Sending as document instead.");
+      return false;
+    }
     try {
-      const metadata = await getImageMetadata(buffer);
+      const metadata = await getImageMetadata(params.buffer);
       const width = metadata?.width;
       const height = metadata?.height;
 
       if (typeof width !== "number" || typeof height !== "number") {
         sendLogger.warn("Photo dimensions are unavailable. Sending as document instead.");
         return false;
+      }
+      if (isLikelyBrowserScreenshotMediaUrl(params.mediaUrl)) {
+        const maxSide = Math.max(width, height);
+        const pixels = width * height;
+        if (
+          maxSide > TELEGRAM_BROWSER_SCREENSHOT_DOC_MAX_SIDE ||
+          pixels > TELEGRAM_BROWSER_SCREENSHOT_DOC_MAX_PIXELS
+        ) {
+          sendLogger.warn(
+            `Browser screenshot dimensions (${width}x${height}) are large. Sending as document instead.`,
+          );
+          return false;
+        }
       }
 
       const shorterSide = Math.min(width, height);
@@ -792,7 +824,11 @@ export async function sendMessageTelegram(
     // Validate photo dimensions before attempting sendPhoto
     let sendImageAsPhoto = true;
     if (kind === "image" && !isGif && !opts.forceDocument) {
-      sendImageAsPhoto = await shouldSendTelegramImageAsPhoto(media.buffer);
+      sendImageAsPhoto = await shouldSendTelegramImageAsPhoto({
+        buffer: media.buffer,
+        mediaUrl,
+        mode: account.config.imageUploadMode,
+      });
     }
     const isVideoNote = kind === "video" && opts.asVideoNote === true;
     const fileName =

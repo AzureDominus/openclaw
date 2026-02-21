@@ -149,6 +149,7 @@ export function resolveWhatsAppAccount(params: {
     textChunkLimit: merged.textChunkLimit,
     chunkMode: merged.chunkMode,
     mediaMaxMb: merged.mediaMaxMb,
+    imageUploadMode: merged.imageUploadMode,
     blockStreaming: merged.blockStreaming,
     ackReaction: merged.ackReaction,
     reactionLevel: merged.reactionLevel,

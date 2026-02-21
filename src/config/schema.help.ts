@@ -1659,4 +1659,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Override default timing. Keys: debounceMs (700), stallSoftMs (25000), stallHardMs (60000), doneHoldMs (1500), errorHoldMs (2500).",
   "messages.inbound.debounceMs":
     "Debounce window (ms) for batching rapid inbound messages from the same sender (0 to disable).",
+  "channels.telegram.imageUploadMode":
+    'How Telegram sends outbound images: "photo" (default photo pipeline), "document" (max fidelity), or "auto" (uses document for oversized/browser screenshot images).',
+  "channels.whatsapp.imageUploadMode":
+    'How WhatsApp sends outbound images: "image", "document", or "auto" (sends browser screenshots as documents).',
 };

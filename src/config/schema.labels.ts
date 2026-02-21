@@ -886,4 +886,6 @@ export const FIELD_LABELS: Record<string, string> = {
   "plugins.entries.*.apiKey": "Plugin API Key", // pragma: allowlist secret
   "plugins.entries.*.env": "Plugin Environment Variables",
   "plugins.entries.*.config": "Plugin Config",
+  "channels.telegram.imageUploadMode": "Telegram Image Upload Mode",
+  "channels.whatsapp.imageUploadMode": "WhatsApp Image Upload Mode",
 };

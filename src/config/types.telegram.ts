@@ -150,6 +150,13 @@ export type TelegramAccountConfig = {
   /** Streaming + chunking settings. Prefer this nested shape over legacy flat keys. */
   streaming?: ChannelPreviewStreamingConfig;
   mediaMaxMb?: number;
+  /**
+   * Outbound image upload mode:
+   * - "photo": always use sendPhoto (Telegram may recompress)
+   * - "document": always use sendDocument (max fidelity)
+   * - "auto": use document for browser screenshots/photo-unsafe dimensions, else photo
+   */
+  imageUploadMode?: "photo" | "document" | "auto";
   /** Telegram API client timeout in seconds (grammY ApiClientOptions). */
   timeoutSeconds?: number;
   /** Telegram polling watchdog threshold in milliseconds. Default: 120000. */

@@ -240,6 +240,7 @@ export const TelegramAccountSchemaBase = z
     textChunkLimit: z.number().int().positive().optional(),
     streaming: ChannelPreviewStreamingConfigSchema.optional(),
     mediaMaxMb: z.number().positive().optional(),
+    imageUploadMode: z.enum(["photo", "document", "auto"]).optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     pollingStallThresholdMs: z.number().int().min(30_000).max(600_000).optional(),
     retry: RetryConfigSchema,
