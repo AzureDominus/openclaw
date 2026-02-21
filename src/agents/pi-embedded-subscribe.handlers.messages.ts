@@ -1,4 +1,5 @@
 import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
+import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
@@ -7,7 +8,6 @@ import {
   isMessagingToolDuplicateNormalized,
   normalizeTextForComparison,
 } from "./pi-embedded-helpers.js";
-import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 import { appendRawStream } from "./pi-embedded-subscribe.raw-stream.js";
 import {
   extractAssistantText,
@@ -210,10 +210,12 @@ export function handleMessageUpdate(
     ctx.state.lastStreamedAssistantCleaned = cleanedText;
 
     if (shouldEmit) {
+      const assistantSegmentId = ctx.ensureAssistantSegmentId();
       emitAgentEvent({
         runId: ctx.params.runId,
         stream: "assistant",
         data: {
+          assistantSegmentId,
           text: cleanedText,
           delta: deltaText,
           mediaUrls: hasMedia ? mediaUrls : undefined,
@@ -222,6 +224,7 @@ export function handleMessageUpdate(
       void ctx.params.onAgentEvent?.({
         stream: "assistant",
         data: {
+          assistantSegmentId,
           text: cleanedText,
           delta: deltaText,
           mediaUrls: hasMedia ? mediaUrls : undefined,
@@ -232,6 +235,9 @@ export function handleMessageUpdate(
         void ctx.params.onPartialReply({
           text: cleanedText,
           mediaUrls: hasMedia ? mediaUrls : undefined,
+          channelData: {
+            openclaw: { assistantSegmentId },
+          },
         });
       }
     }
@@ -298,10 +304,12 @@ export function handleMessageEnd(
   }
 
   if (!ctx.state.emittedAssistantUpdate && (cleanedText || hasMedia)) {
+    const assistantSegmentId = ctx.ensureAssistantSegmentId();
     emitAgentEvent({
       runId: ctx.params.runId,
       stream: "assistant",
       data: {
+        assistantSegmentId,
         text: cleanedText,
         delta: cleanedText,
         mediaUrls: hasMedia ? mediaUrls : undefined,
@@ -310,6 +318,7 @@ export function handleMessageEnd(
     void ctx.params.onAgentEvent?.({
       stream: "assistant",
       data: {
+        assistantSegmentId,
         text: cleanedText,
         delta: cleanedText,
         mediaUrls: hasMedia ? mediaUrls : undefined,

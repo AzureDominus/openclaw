@@ -611,7 +611,11 @@ export async function runEmbeddedPiAgent(
             provider === "anthropic" ? scrubAnthropicRefusalMagic(promptText) : promptText;
           const onPartialReplyForAttempt =
             isContinueGuardAttempt && params.onPartialReply
-              ? async (payload: { text?: string; mediaUrls?: string[] }) => {
+              ? async (payload: {
+                  text?: string;
+                  mediaUrls?: string[];
+                  channelData?: Record<string, unknown>;
+                }) => {
                   const strippedText =
                     typeof payload.text === "string"
                       ? stripDeclaredStopReasonLine(payload.text)
@@ -1145,6 +1149,7 @@ export async function runEmbeddedPiAgent(
           if (shouldRetryForMissingStopReason || shouldRetryForTextualToolCallOutput) {
             const candidatePayloads = buildEmbeddedRunPayloads({
               assistantTexts: attempt.assistantTexts ?? [],
+              assistantTextSegments: attempt.assistantTextSegments ?? [],
               toolMetas: attempt.toolMetas ?? [],
               lastAssistant: attempt.lastAssistant,
               lastToolError: attempt.lastToolError,
@@ -1204,6 +1209,7 @@ export async function runEmbeddedPiAgent(
 
           let payloads = buildEmbeddedRunPayloads({
             assistantTexts: attempt.assistantTexts ?? [],
+            assistantTextSegments: attempt.assistantTextSegments ?? [],
             toolMetas: attempt.toolMetas ?? [],
             lastAssistant: attempt.lastAssistant,
             lastToolError: attempt.lastToolError,

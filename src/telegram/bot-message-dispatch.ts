@@ -50,6 +50,22 @@ function normalizePartialDraftText(text?: string): string {
   return stripDeclaredStopReasonLine(text);
 }
 
+function extractAssistantSegmentId(channelData: unknown): string | undefined {
+  if (!channelData || typeof channelData !== "object") {
+    return undefined;
+  }
+  const openclaw = (channelData as { openclaw?: unknown }).openclaw;
+  if (!openclaw || typeof openclaw !== "object") {
+    return undefined;
+  }
+  const segmentId = (openclaw as { assistantSegmentId?: unknown }).assistantSegmentId;
+  if (typeof segmentId !== "string") {
+    return undefined;
+  }
+  const normalized = segmentId.trim();
+  return normalized.length > 0 ? normalized : undefined;
+}
+
 async function resolveStickerVisionSupport(cfg: OpenClawConfig, agentId: string) {
   try {
     const catalog = await loadModelCatalog({ config: cfg });
@@ -135,20 +151,34 @@ export const dispatchTelegramMessage = async ({
   let lastPartialText = "";
   let draftText = "";
   let hasStreamedMessage = false;
-  const streamedPartialSegments = new Set<string>();
+  let currentPartialSegmentId: string | undefined;
+  const streamedPartialSegmentIds = new Set<string>();
+  const streamedPartialTextsFallback = new Set<string>();
   const resetDraftTracking = () => {
     lastPartialText = "";
     draftText = "";
+    currentPartialSegmentId = undefined;
     draftChunker?.reset();
   };
-  const rememberStreamedPartialSegment = (text?: string) => {
-    const normalized = normalizeDraftTextForDedup(text);
+  const rememberStreamedPartialSegment = (params: { text?: string; segmentId?: string }) => {
+    if (params.segmentId) {
+      streamedPartialSegmentIds.add(params.segmentId);
+      return;
+    }
+    const normalized = normalizeDraftTextForDedup(params.text);
     if (normalized) {
-      streamedPartialSegments.add(normalized);
+      streamedPartialTextsFallback.add(normalized);
     }
   };
-  const updateDraftFromPartial = (text?: string) => {
-    const normalizedText = normalizePartialDraftText(text);
+  const updateDraftFromPartial = (payload: {
+    text?: string;
+    channelData?: Record<string, unknown>;
+  }) => {
+    const segmentId = extractAssistantSegmentId(payload.channelData);
+    if (segmentId) {
+      currentPartialSegmentId = segmentId;
+    }
+    const normalizedText = normalizePartialDraftText(payload.text);
     if (!draftStream || !normalizedText) {
       return;
     }
@@ -221,12 +251,16 @@ export const dispatchTelegramMessage = async ({
       return;
     }
     const currentSegment = normalizeDraftTextForDedup(lastPartialText);
+    const currentSegmentId = currentPartialSegmentId;
     if (!currentSegment) {
       resetDraftTracking();
       return;
     }
     await flushDraft();
-    rememberStreamedPartialSegment(lastPartialText);
+    rememberStreamedPartialSegment({
+      text: lastPartialText,
+      segmentId: currentSegmentId,
+    });
     draftStream.forceNewMessage();
     resetDraftTracking();
   };
@@ -346,12 +380,18 @@ export const dispatchTelegramMessage = async ({
           if (info.kind === "final") {
             const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
             const normalizedFinalText = normalizeDraftTextForDedup(payload.text);
+            const finalAssistantSegmentId = extractAssistantSegmentId(payload.channelData);
+            const hasReplaySegmentId =
+              typeof finalAssistantSegmentId === "string" &&
+              streamedPartialSegmentIds.has(finalAssistantSegmentId);
             const isReplayedPartialSegment =
               streamMode === "partial" &&
               !payload.isError &&
               !hasMedia &&
-              normalizedFinalText.length > 0 &&
-              streamedPartialSegments.has(normalizedFinalText);
+              (hasReplaySegmentId ||
+                (!finalAssistantSegmentId &&
+                  normalizedFinalText.length > 0 &&
+                  streamedPartialTextsFallback.has(normalizedFinalText)));
             if (isReplayedPartialSegment) {
               // This segment was already streamed as its own message before a tool call.
               deliveryState.delivered = true;
@@ -384,7 +424,10 @@ export const dispatchTelegramMessage = async ({
                   linkPreview: telegramCfg.linkPreview,
                   buttons: previewButtons,
                 });
-                rememberStreamedPartialSegment(finalText);
+                rememberStreamedPartialSegment({
+                  text: finalText,
+                  segmentId: finalAssistantSegmentId,
+                });
                 finalizedViaPreviewMessage = true;
                 deliveryState.delivered = true;
                 return;
@@ -427,7 +470,10 @@ export const dispatchTelegramMessage = async ({
                   linkPreview: telegramCfg.linkPreview,
                   buttons: previewButtons,
                 });
-                rememberStreamedPartialSegment(finalText);
+                rememberStreamedPartialSegment({
+                  text: finalText,
+                  segmentId: finalAssistantSegmentId,
+                });
                 finalizedViaPreviewMessage = true;
                 deliveryState.delivered = true;
                 return;
@@ -470,7 +516,7 @@ export const dispatchTelegramMessage = async ({
       replyOptions: {
         skillFilter,
         disableBlockStreaming,
-        onPartialReply: draftStream ? (payload) => updateDraftFromPartial(payload.text) : undefined,
+        onPartialReply: draftStream ? (payload) => updateDraftFromPartial(payload) : undefined,
         onAssistantMessageStart: draftStream
           ? async () => {
               // Only split preview bubbles in block mode. In partial mode, keep
