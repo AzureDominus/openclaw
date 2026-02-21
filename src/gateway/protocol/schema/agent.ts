@@ -124,6 +124,8 @@ export const WakeParamsSchema = Type.Object(
   {
     mode: Type.Union([Type.Literal("now"), Type.Literal("next-heartbeat")]),
     text: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
+    sessionKey: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
 );

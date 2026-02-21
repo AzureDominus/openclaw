@@ -202,4 +202,40 @@ describe("startHeartbeatRunner", () => {
 
     runner.stop();
   });
+
+  it("runs targeted wake for agents outside the heartbeat schedule list", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: {
+        agents: {
+          defaults: { heartbeat: { every: "24h" } },
+          list: [{ id: "timmy", heartbeat: { every: "24h" } }, { id: "techmo" }],
+        },
+      } as OpenClawConfig,
+      runOnce: runSpy,
+    });
+
+    const techmoSessionKey = "agent:techmo:telegram:techmo:direct:8539859803";
+    requestHeartbeatNow({
+      reason: "wake",
+      sessionKey: techmoSessionKey,
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(runSpy).toHaveBeenCalledTimes(1);
+    expect(runSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "techmo",
+        reason: "wake",
+        sessionKey: techmoSessionKey,
+        allowDisabledAgent: true,
+      }),
+    );
+
+    runner.stop();
+  });
 });

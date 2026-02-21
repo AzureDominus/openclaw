@@ -357,6 +357,9 @@ agent heartbeats immediately.
 
 Use `--mode next-heartbeat` to wait for the next scheduled tick.
 
+To target a specific session instead of the main session, pass
+`--session-key <sessionKey>` (optionally with `--agent <agentId>`).
+
 ## Reasoning delivery (optional)
 
 By default, heartbeats deliver only the final “answer” payload.

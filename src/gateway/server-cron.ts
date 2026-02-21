@@ -1,5 +1,5 @@
-import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { CliDeps } from "../cli/deps.js";
+import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { loadConfig } from "../config/config.js";
 import {
   canonicalizeMainSessionAlias,
@@ -147,6 +147,23 @@ export function buildGatewayCronService(params: {
     return { runtimeConfig, agentId, sessionKey };
   };
 
+  const resolveCronEnqueueTarget = (opts?: { agentId?: string; sessionKey?: string | null }) => {
+    const runtimeConfig = loadConfig();
+    const requestedAgentId = opts?.agentId ? resolveCronAgent(opts.agentId).agentId : undefined;
+    const derivedAgentId =
+      requestedAgentId ??
+      (opts?.sessionKey
+        ? normalizeAgentId(resolveAgentIdFromSessionKey(opts.sessionKey))
+        : undefined);
+    const agentId = derivedAgentId ?? resolveDefaultAgentId(runtimeConfig);
+    const sessionKey = resolveCronSessionKey({
+      runtimeConfig,
+      agentId,
+      requestedSessionKey: opts?.sessionKey,
+    });
+    return { agentId, sessionKey };
+  };
+
   const defaultAgentId = resolveDefaultAgentId(params.cfg);
   const runLogPrune = resolveCronRunLogPruneOptions(params.cfg.cron?.runLog);
   const resolveSessionStorePath = (agentId?: string) =>
@@ -164,12 +181,7 @@ export function buildGatewayCronService(params: {
     resolveSessionStorePath,
     sessionStorePath,
     enqueueSystemEvent: (text, opts) => {
-      const { agentId, cfg: runtimeConfig } = resolveCronAgent(opts?.agentId);
-      const sessionKey = resolveCronSessionKey({
-        runtimeConfig,
-        agentId,
-        requestedSessionKey: opts?.sessionKey,
-      });
+      const { sessionKey } = resolveCronEnqueueTarget(opts);
       enqueueSystemEvent(text, { sessionKey, contextKey: opts?.contextKey });
     },
     requestHeartbeatNow: (opts) => {

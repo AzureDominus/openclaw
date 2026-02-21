@@ -86,6 +86,52 @@ describe("buildGatewayCronService", () => {
     }
   });
 
+  it("routes manual wake to the requested agent session key", () => {
+    const tmpDir = path.join(os.tmpdir(), `server-cron-wake-${Date.now()}`);
+    const cfg = {
+      session: {
+        mainKey: "main",
+      },
+      agents: {
+        list: [{ id: "main", default: true }, { id: "techmo" }],
+      },
+      cron: {
+        store: path.join(tmpDir, "cron.json"),
+      },
+    } as OpenClawConfig;
+    loadConfigMock.mockReturnValue(cfg);
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+
+    const targetSessionKey = "agent:techmo:telegram:techmo:direct:8539859803";
+    const result = state.cron.wake({
+      mode: "now",
+      text: "wake techmo",
+      sessionKey: targetSessionKey,
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      "wake techmo",
+      expect.objectContaining({
+        sessionKey: targetSessionKey,
+      }),
+    );
+    expect(requestHeartbeatNowMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: "wake",
+        agentId: "techmo",
+        sessionKey: targetSessionKey,
+      }),
+    );
+
+    state.cron.stop();
+  });
+
   it("blocks private webhook URLs via SSRF-guarded fetch", async () => {
     const tmpDir = path.join(os.tmpdir(), `server-cron-ssrf-${Date.now()}`);
     const cfg = {

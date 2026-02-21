@@ -2,10 +2,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import * as replyModule from "../auto-reply/reply.js";
 import { whatsappOutbound } from "../channels/plugins/outbound/whatsapp.js";
-import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveAgentIdFromSessionKey,
   resolveAgentMainSessionKey,
@@ -469,6 +469,42 @@ describe("runHeartbeatOnce", () => {
     expect(res.status).toBe("skipped");
     if (res.status === "skipped") {
       expect(res.reason).toBe("disabled");
+    }
+  });
+
+  it("allows explicit wake runs for agents outside the heartbeat schedule list", async () => {
+    const tmpDir = await createCaseDir("hb-targeted-disabled-agent");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    try {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: { every: "30m", target: "none" },
+          },
+          list: [{ id: "main" }, { id: "ops", workspace: tmpDir }],
+        },
+        session: { store: storePath },
+      };
+
+      replySpy.mockResolvedValue({ text: "wake event processed" });
+
+      const res = await runHeartbeatOnce({
+        cfg,
+        agentId: "ops",
+        reason: "wake",
+        allowDisabledAgent: true,
+        deps: {
+          getQueueSize: () => 0,
+          nowMs: () => 0,
+        },
+      });
+
+      expect(res.status).toBe("ran");
+      expect(replySpy).toHaveBeenCalledOnce();
+    } finally {
+      replySpy.mockRestore();
     }
   });
 

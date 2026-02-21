@@ -1,7 +1,4 @@
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
-import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
-import { resolveCronDeliveryPlan } from "../delivery.js";
-import { sweepCronRunSessions } from "../session-reaper.js";
 import type {
   CronDeliveryStatus,
   CronJob,
@@ -9,6 +6,10 @@ import type {
   CronRunStatus,
   CronRunTelemetry,
 } from "../types.js";
+import type { CronEvent, CronServiceState } from "./state.js";
+import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
+import { resolveCronDeliveryPlan } from "../delivery.js";
+import { sweepCronRunSessions } from "../session-reaper.js";
 import {
   computeJobNextRunAtMs,
   nextWakeAtMs,
@@ -16,7 +17,6 @@ import {
   resolveJobPayloadTextForMain,
 } from "./jobs.js";
 import { locked } from "./locked.js";
-import type { CronEvent, CronServiceState } from "./state.js";
 import { ensureLoaded, persist } from "./store.js";
 
 const MAX_TIMER_DELAY_MS = 60_000;
@@ -848,15 +848,22 @@ function emitJobFinished(
 
 export function wake(
   state: CronServiceState,
-  opts: { mode: "now" | "next-heartbeat"; text: string },
+  opts: { mode: "now" | "next-heartbeat"; text: string; agentId?: string; sessionKey?: string },
 ) {
   const text = opts.text.trim();
   if (!text) {
     return { ok: false } as const;
   }
-  state.deps.enqueueSystemEvent(text);
+  const target =
+    opts.agentId || opts.sessionKey
+      ? {
+          agentId: opts.agentId,
+          sessionKey: opts.sessionKey,
+        }
+      : undefined;
+  state.deps.enqueueSystemEvent(text, target);
   if (opts.mode === "now") {
-    state.deps.requestHeartbeatNow({ reason: "wake" });
+    state.deps.requestHeartbeatNow({ reason: "wake", ...target });
   }
   return { ok: true } as const;
 }
