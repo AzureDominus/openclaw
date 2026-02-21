@@ -9,7 +9,7 @@
     "noEmitOnError": false,
     "outDir": "dist/plugin-sdk",
     "rootDir": ".",
-    "tsBuildInfoFile": "dist/plugin-sdk/.tsbuildinfo"
+    "tsBuildInfoFile": ".tsbuildinfo"
   },
   "include": [
     "src/plugin-sdk/**/*.ts",
