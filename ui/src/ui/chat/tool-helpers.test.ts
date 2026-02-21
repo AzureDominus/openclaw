@@ -1,7 +1,21 @@
 import { describe, it, expect } from "vitest";
-import { formatToolOutputForSidebar, getTruncatedPreview } from "./tool-helpers.ts";
+import {
+  formatToolCallForSidebar,
+  formatToolOutputForSidebar,
+  getTruncatedPreview,
+} from "./tool-helpers.ts";
 
 describe("tool-helpers", () => {
+  describe("formatToolCallForSidebar", () => {
+    it("formats tool call payload as JSON code block", () => {
+      const result = formatToolCallForSidebar("exec", { command: "echo hi" });
+      expect(result).toContain("```json");
+      expect(result).toContain('"type": "tool_call"');
+      expect(result).toContain('"name": "exec"');
+      expect(result).toContain('"command": "echo hi"');
+    });
+  });
+
   describe("formatToolOutputForSidebar", () => {
     it("formats valid JSON object as code block", () => {
       const input = '{"name":"test","value":123}';
@@ -37,25 +51,31 @@ describe("tool-helpers", () => {
       expect(result).toContain('"inner"');
     });
 
-    it("returns plain text for non-JSON content", () => {
+    it("wraps plain text output as a text code block", () => {
       const input = "This is plain text output";
       const result = formatToolOutputForSidebar(input);
 
-      expect(result).toBe("This is plain text output");
+      expect(result).toBe(`\`\`\`text
+This is plain text output
+\`\`\``);
     });
 
-    it("returns as-is for invalid JSON starting with {", () => {
+    it("wraps invalid JSON-looking output as text", () => {
       const input = "{not valid json";
       const result = formatToolOutputForSidebar(input);
 
-      expect(result).toBe("{not valid json");
+      expect(result).toBe(`\`\`\`text
+{not valid json
+\`\`\``);
     });
 
-    it("returns as-is for invalid JSON starting with [", () => {
+    it("wraps invalid array-like output as text", () => {
       const input = "[not valid json";
       const result = formatToolOutputForSidebar(input);
 
-      expect(result).toBe("[not valid json");
+      expect(result).toBe(`\`\`\`text
+[not valid json
+\`\`\``);
     });
 
     it("trims whitespace before detecting JSON", () => {
@@ -68,12 +88,16 @@ describe("tool-helpers", () => {
 
     it("handles empty string", () => {
       const result = formatToolOutputForSidebar("");
-      expect(result).toBe("");
+      expect(result).toBe(`\`\`\`text
+
+\`\`\``);
     });
 
     it("handles whitespace-only string", () => {
       const result = formatToolOutputForSidebar("   ");
-      expect(result).toBe("   ");
+      expect(result).toBe(`\`\`\`text
+   
+\`\`\``);
     });
   });
 
