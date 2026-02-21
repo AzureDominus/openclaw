@@ -123,7 +123,28 @@ const CONNECTIVITY_ERROR_CODES = new Set([
   "ERR_SOCKET_CLOSED",
 ]);
 const PLAYWRIGHT_UNAVAILABLE_MARKER = "playwright is not available in this gateway build";
-const TRANSIENT_PLAYWRIGHT_RETRY_DELAY_MS = 200;
+const BROWSER_REQUEST_TIMEOUT_MARKER = "__openclaw_browser_request_timeout__";
+const TRANSIENT_BROWSER_RETRY_ATTEMPTS = 3;
+const TRANSIENT_BROWSER_RETRY_DELAY_MS = 200;
+const REQUEST_TIMEOUT_SKEW_MS = 250;
+
+type BrowserStatusError = Error & {
+  browserStatusCode?: number;
+};
+
+function createBrowserStatusError(statusCode: number, message: string): BrowserStatusError {
+  const err = new Error(message) as BrowserStatusError;
+  err.browserStatusCode = statusCode;
+  return err;
+}
+
+function getBrowserStatusCode(err: unknown): number | undefined {
+  if (!err || typeof err !== "object") {
+    return undefined;
+  }
+  const value = (err as { browserStatusCode?: unknown }).browserStatusCode;
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
 
 function resolveDispatcherBrowserControlOwnership(url: string): BrowserControlOwnership {
   if (isAbsoluteHttp(url)) {
@@ -217,12 +238,14 @@ function enhanceDispatcherPathError(url: string, err: unknown): Error {
   return new Error(`${normalized} ${suffix}`, err instanceof Error ? { cause: err } : undefined);
 }
 
-function isLikelyConnectivityError(err: unknown, msgLower: string): boolean {
-  const code = extractErrorCode(err);
-  if (code && CONNECTIVITY_ERROR_CODES.has(code.toUpperCase())) {
-    return true;
+function getNestedErrorCode(err: unknown): string | undefined {
+  if (!err || typeof err !== "object") {
+    return undefined;
   }
+  return extractErrorCode((err as { cause?: unknown }).cause);
+}
 
+function isLikelyConnectivityMessage(msgLower: string): boolean {
   return (
     msgLower.includes("fetch failed") ||
     msgLower.includes("networkerror") ||
@@ -237,38 +260,112 @@ function isLikelyConnectivityError(err: unknown, msgLower: string): boolean {
   );
 }
 
-function enhanceBrowserFetchError(url: string, err: unknown, timeoutMs: number): Error {
+function isLikelyConnectivityError(err: unknown, msgLower: string): boolean {
+  const code = extractErrorCode(err);
+  if (code && CONNECTIVITY_ERROR_CODES.has(code.toUpperCase())) {
+    return true;
+  }
+  const nestedCode = getNestedErrorCode(err);
+  if (nestedCode && CONNECTIVITY_ERROR_CODES.has(nestedCode.toUpperCase())) {
+    return true;
+  }
+  return isLikelyConnectivityMessage(msgLower);
+}
+
+function isLikelyRequestTimeout(params: {
+  msgLower: string;
+  timeoutMs: number;
+  elapsedMs: number;
+}) {
+  if (params.msgLower.includes(BROWSER_REQUEST_TIMEOUT_MARKER)) {
+    return true;
+  }
+  const hasTimeoutLanguage =
+    params.msgLower.includes("timed out") ||
+    params.msgLower.includes("timeout") ||
+    params.msgLower.includes("aborterror") ||
+    params.msgLower.includes("aborted");
+  if (!hasTimeoutLanguage) {
+    return false;
+  }
+  return params.elapsedMs + REQUEST_TIMEOUT_SKEW_MS >= params.timeoutMs;
+}
+
+function isRetryableBrowserStatusError(statusCode: number, msgLower: string): boolean {
+  if (statusCode === 501 && msgLower.includes(PLAYWRIGHT_UNAVAILABLE_MARKER)) {
+    return true;
+  }
+  if (statusCode === 502 || statusCode === 503 || statusCode === 504) {
+    return true;
+  }
+  return statusCode >= 500 && isLikelyConnectivityMessage(msgLower);
+}
+
+function shouldRetryTransientBrowserFailure(params: {
+  err: unknown;
+  msgLower: string;
+  timeoutMs: number;
+  elapsedMs: number;
+  statusCode?: number;
+  callerAborted: boolean;
+}): boolean {
+  if (params.callerAborted) {
+    return false;
+  }
+  if (params.msgLower.includes("browser control disabled")) {
+    return false;
+  }
+  if (typeof params.statusCode === "number") {
+    return isRetryableBrowserStatusError(params.statusCode, params.msgLower);
+  }
+  if (params.msgLower.includes(PLAYWRIGHT_UNAVAILABLE_MARKER)) {
+    return true;
+  }
+  if (isLikelyConnectivityError(params.err, params.msgLower)) {
+    return true;
+  }
+  if (
+    isLikelyRequestTimeout({
+      msgLower: params.msgLower,
+      timeoutMs: params.timeoutMs,
+      elapsedMs: params.elapsedMs,
+    })
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function enhanceBrowserFetchError(
+  url: string,
+  err: unknown,
+  params: { timeoutMs: number; elapsedMs: number; statusCode?: number },
+): Error {
   const operatorHint = resolveBrowserFetchOperatorHint(url);
   const msg = formatErrorMessage(err).trim() || String(err).trim();
   const msgLower = msg.toLowerCase();
-  const looksLikeTimeout =
-    msgLower.includes("timed out") ||
-    msgLower.includes("timeout") ||
-    msgLower.includes("aborted") ||
-    msgLower.includes("abort") ||
-    msgLower.includes("aborterror");
+  const looksLikeTimeout = isLikelyRequestTimeout({
+    msgLower,
+    timeoutMs: params.timeoutMs,
+    elapsedMs: params.elapsedMs,
+  });
   const looksLikeConnectivity = isLikelyConnectivityError(err, msgLower);
+  const retryableStatus =
+    typeof params.statusCode === "number" &&
+    isRetryableBrowserStatusError(params.statusCode, msgLower);
   const retryGuidance =
     "Do NOT retry the browser tool automatically. " +
     "Ask the user whether they want to try the browser step again or continue with an alternative approach.";
 
   if (looksLikeTimeout) {
+    const elapsedMs = Math.max(1, Math.round(Math.min(params.elapsedMs, params.timeoutMs)));
     return new Error(
       appendBrowserToolModelHint(
-        `Browser tool is currently unavailable (timed out after ${timeoutMs}ms). ${operatorHint} ${retryGuidance}`,
+        `Browser tool is currently unavailable (timed out after ${elapsedMs}ms). ${operatorHint} ${retryGuidance}`,
       ),
       err instanceof Error ? { cause: err } : undefined,
     );
   }
-  if (looksLikeConnectivity) {
-    return new Error(
-      appendBrowserToolModelHint(
-        `Browser tool is currently unavailable. ${operatorHint} ${retryGuidance} (${msg})`,
-      ),
-      err instanceof Error ? { cause: err } : undefined,
-    );
-  }
-
   if (msgLower.includes("browser control disabled")) {
     return new Error(
       appendBrowserToolModelHint(
@@ -281,8 +378,16 @@ function enhanceBrowserFetchError(url: string, err: unknown, timeoutMs: number):
   if (msgLower.includes(PLAYWRIGHT_UNAVAILABLE_MARKER)) {
     return new Error(
       appendBrowserToolModelHint(
-        "Browser tool appears unavailable after retry. " +
+        "Browser tool appears unavailable after gateway retries. " +
           "Ask the user whether they want to try the browser step again later or continue with an alternative approach.",
+      ),
+      err instanceof Error ? { cause: err } : undefined,
+    );
+  }
+  if (looksLikeConnectivity || retryableStatus) {
+    return new Error(
+      appendBrowserToolModelHint(
+        `Browser tool is currently unavailable. ${operatorHint} ${retryGuidance} (${msg})`,
       ),
       err instanceof Error ? { cause: err } : undefined,
     );
@@ -311,7 +416,7 @@ async function fetchHttpJson<T>(
     }
   }
 
-  const t = setTimeout(() => ctrl.abort(new Error("timed out")), timeoutMs);
+  const t = setTimeout(() => ctrl.abort(new Error(BROWSER_REQUEST_TIMEOUT_MARKER)), timeoutMs);
   let release: (() => Promise<void>) | undefined;
   try {
     const guarded = await fetchWithSsrFGuard({
@@ -332,7 +437,7 @@ async function fetchHttpJson<T>(
         );
       }
       const text = await res.text().catch(() => "");
-      throw new BrowserServiceError(text || `HTTP ${res.status}`);
+      throw createBrowserStatusError(res.status, text || `HTTP ${res.status}`);
     }
     return (await res.json()) as T;
   } finally {
@@ -348,15 +453,16 @@ export async function fetchBrowserJson<T>(
   url: string,
   init?: RequestInit & { timeoutMs?: number },
 ): Promise<T> {
-  return await fetchBrowserJsonInternal(url, init, 1);
+  return await fetchBrowserJsonInternal(url, init, TRANSIENT_BROWSER_RETRY_ATTEMPTS);
 }
 
 async function fetchBrowserJsonInternal<T>(
   url: string,
   init: (RequestInit & { timeoutMs?: number }) | undefined,
-  transientPlaywrightRetriesRemaining: number,
+  transientRetriesRemaining: number,
 ): Promise<T> {
   const timeoutMs = init?.timeoutMs ?? 5000;
+  const startedAt = Date.now();
   let isDispatcherPath = false;
   try {
     if (isAbsoluteHttp(url)) {
@@ -401,7 +507,10 @@ async function fetchBrowserJsonInternal<T>(
 
     let timer: ReturnType<typeof setTimeout> | undefined;
     if (timeoutMs) {
-      timer = setTimeout(() => abortCtrl.abort(new Error("timed out")), timeoutMs);
+      timer = setTimeout(
+        () => abortCtrl.abort(new Error(BROWSER_REQUEST_TIMEOUT_MARKER)),
+        timeoutMs,
+      );
     }
 
     const dispatchPromise = dispatchBrowserControlRequest({
@@ -440,27 +549,36 @@ async function fetchBrowserJsonInternal<T>(
         result.body && typeof result.body === "object" && "error" in result.body
           ? String((result.body as { error?: unknown }).error)
           : `HTTP ${result.status}`;
-      const isPlaywrightTemporarilyUnavailable =
-        result.status === 501 &&
-        message.toLowerCase().includes(PLAYWRIGHT_UNAVAILABLE_MARKER) &&
-        transientPlaywrightRetriesRemaining > 0;
-      if (isPlaywrightTemporarilyUnavailable) {
-        await new Promise((resolve) => setTimeout(resolve, TRANSIENT_PLAYWRIGHT_RETRY_DELAY_MS));
-        return await fetchBrowserJsonInternal(url, init, transientPlaywrightRetriesRemaining - 1);
-      }
-      throw new BrowserServiceError(message);
+      throw createBrowserStatusError(result.status, message);
     }
     return result.body as T;
   } catch (err) {
     if (err instanceof BrowserServiceError) {
       throw err;
     }
+    const msg = (formatErrorMessage(err).trim() || String(err).trim()).toLowerCase();
+    const elapsedMs = Date.now() - startedAt;
+    const statusCode = getBrowserStatusCode(err);
+    const shouldRetry =
+      transientRetriesRemaining > 0 &&
+      shouldRetryTransientBrowserFailure({
+        err,
+        msgLower: msg,
+        timeoutMs,
+        elapsedMs,
+        statusCode,
+        callerAborted: init?.signal?.aborted === true,
+      });
+    if (shouldRetry) {
+      await new Promise((resolve) => setTimeout(resolve, TRANSIENT_BROWSER_RETRY_DELAY_MS));
+      return await fetchBrowserJsonInternal(url, init, transientRetriesRemaining - 1);
+    }
     // Dispatcher-path failures are service-operation failures, not network
     // reachability failures. Keep the original context, but retain anti-retry hints.
     if (isDispatcherPath) {
       throw enhanceDispatcherPathError(url, err);
     }
-    throw enhanceBrowserFetchError(url, err, timeoutMs);
+    throw enhanceBrowserFetchError(url, err, { timeoutMs, elapsedMs, statusCode });
   }
 }
 

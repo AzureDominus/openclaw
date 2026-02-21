@@ -77,7 +77,7 @@ describe("browser fetch error classification", () => {
   });
 
   it("uses user-confirmation guidance for timeouts", async () => {
-    mocks.dispatch.mockImplementationOnce(async () => await new Promise(() => {}));
+    mocks.dispatch.mockImplementation(async () => await new Promise(() => {}));
 
     try {
       await fetchBrowserJson("/snapshot", { timeoutMs: 10 });
@@ -88,6 +88,8 @@ describe("browser fetch error classification", () => {
       expect(msg).toContain("Ask the user whether they want to try the browser step again");
       expect(msg).not.toContain("Restart");
     }
+
+    expect(mocks.dispatch).toHaveBeenCalledTimes(4);
   });
 
   it("uses user-confirmation guidance for connectivity errors", async () => {
@@ -109,6 +111,8 @@ describe("browser fetch error classification", () => {
       expect(msg).toContain("Ask the user whether they want to try the browser step again");
       expect(msg).not.toContain("Restart");
     }
+
+    expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
   it("auto-retries once for transient Playwright-unavailable responses", async () => {
@@ -139,11 +143,27 @@ describe("browser fetch error classification", () => {
       throw new Error("expected fetchBrowserJson to throw");
     } catch (err) {
       const msg = String(err);
-      expect(msg).toContain("Browser tool appears unavailable after retry");
+      expect(msg).toContain("Browser tool appears unavailable after gateway retries");
       expect(msg).toContain("Ask the user whether they want to try the browser step again later");
       expect(msg).not.toContain("Restart");
     }
 
-    expect(mocks.dispatch).toHaveBeenCalledTimes(2);
+    expect(mocks.dispatch).toHaveBeenCalledTimes(4);
+  });
+
+  it("keeps route-level action timeout errors instead of labeling gateway unavailability", async () => {
+    mocks.dispatch.mockResolvedValueOnce({
+      status: 500,
+      body: { error: "locator.click: Timeout 5000ms exceeded." },
+    });
+
+    try {
+      await fetchBrowserJson("/act", { method: "POST", body: "{}", timeoutMs: 20000 });
+      throw new Error("expected fetchBrowserJson to throw");
+    } catch (err) {
+      const msg = String(err);
+      expect(msg).toContain("locator.click: Timeout 5000ms exceeded");
+      expect(msg).not.toContain("Browser tool is currently unavailable");
+    }
   });
 });
