@@ -21,6 +21,20 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText(leaked)).toBe("Quick check first.");
   });
 
+  it("strips leaked browser-tool plain-text drafts after continue-guard noise", () => {
+    const leaked =
+      "Found it. I’m entering the newest code and submitting now. +#+#+#+#+assistant to=functions.browser մեկնաբանություն ppjson\n" +
+      '{"action":"act","target":"host","targetId":"2879529FB8891C7A057C32D61626AA0B","request":{"kind":"type","ref":"e3","text":"433848"}}';
+    expect(sanitizeUserFacingText(leaked)).toBe(
+      "Found it. I’m entering the newest code and submitting now.",
+    );
+  });
+
+  it("does not strip plain-text mentions when no tool-call JSON draft follows", () => {
+    const text = "Debug note: assistant to=functions.browser appears in this doc string.";
+    expect(sanitizeUserFacingText(text)).toBe(text);
+  });
+
   it("can preserve leaked plain-text tool-call drafts for internal UI surfaces", () => {
     const leaked =
       "Quick check first. +#+#+#+#+assistant to=multi_tool_use.parallel\n" +
@@ -30,6 +44,17 @@ describe("sanitizeUserFacingText", () => {
         stripFailedToolCallDraft: false,
       }),
     ).toContain("assistant to=multi_tool_use.parallel");
+  });
+
+  it("can preserve leaked browser-tool drafts for internal UI surfaces", () => {
+    const leaked =
+      "Found it. I’m entering the newest code and submitting now. +#+#+#+#+assistant to=functions.browser մեկնաբանություն ppjson\n" +
+      '{"action":"act","target":"host","targetId":"2879529FB8891C7A057C32D61626AA0B","request":{"kind":"type","ref":"e3","text":"433848"}}';
+    expect(
+      sanitizeUserFacingText(leaked, {
+        stripFailedToolCallDraft: false,
+      }),
+    ).toContain("assistant to=functions.browser");
   });
 
   it("does not clobber normal numeric prefixes", () => {
