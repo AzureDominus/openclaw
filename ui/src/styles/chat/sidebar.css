@@ -86,12 +86,19 @@
   background: rgba(0, 0, 0, 0.12);
   border-radius: 4px;
   padding: 12px;
-  overflow-x: auto;
+  overflow: auto;
+  max-height: min(52vh, 560px);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .sidebar-markdown code {
   font-family: var(--mono);
   font-size: 13px;
+  white-space: inherit;
+  overflow-wrap: inherit;
+  word-break: inherit;
 }
 
 /* Mobile: Full-screen modal */

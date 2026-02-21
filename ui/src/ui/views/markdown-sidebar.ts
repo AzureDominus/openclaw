@@ -14,7 +14,7 @@ export function renderMarkdownSidebar(props: MarkdownSidebarProps) {
   return html`
     <div class="sidebar-panel">
       <div class="sidebar-header">
-        <div class="sidebar-title">Tool Output</div>
+        <div class="sidebar-title">Tool Details</div>
         <button @click=${props.onClose} class="btn" title="Close sidebar">
           ${icons.x}
         </button>

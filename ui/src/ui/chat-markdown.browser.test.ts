@@ -4,7 +4,7 @@ import { mountApp, registerAppMountHooks } from "./test-helpers/app-mount.ts";
 registerAppMountHooks();
 
 describe("chat markdown rendering", () => {
-  it("renders markdown inside tool output sidebar", async () => {
+  it("shows raw tool call payload and raw output in tool sidebar", async () => {
     const app = mountApp("/chat");
     await app.updateComplete;
 
@@ -13,8 +13,8 @@ describe("chat markdown rendering", () => {
       {
         role: "assistant",
         content: [
-          { type: "toolcall", name: "noop", arguments: {} },
-          { type: "toolresult", name: "noop", text: "Hello **world**" },
+          { type: "toolcall", name: "exec", arguments: { command: "echo hi" } },
+          { type: "toolresult", name: "exec", text: "Hello **world**" },
         ],
         timestamp,
       },
@@ -31,7 +31,12 @@ describe("chat markdown rendering", () => {
 
     await app.updateComplete;
 
-    const strong = app.querySelector(".sidebar-markdown strong");
-    expect(strong?.textContent).toBe("world");
+    const sidebar = app.querySelector(".sidebar-markdown");
+    const text = sidebar?.textContent ?? "";
+    expect(text).toContain('"type": "tool_call"');
+    expect(text).toContain('"name": "exec"');
+    expect(text).toContain('"command": "echo hi"');
+    expect(text).toContain("Hello **world**");
+    expect(app.querySelector(".sidebar-markdown strong")).toBeNull();
   });
 });
