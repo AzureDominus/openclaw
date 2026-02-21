@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 import {
   handleToolExecutionEnd,
   handleToolExecutionStart,
 } from "./pi-embedded-subscribe.handlers.tools.js";
-import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 
 // Minimal mock context factory. Only the fields needed for the media emission path.
 function createMockContext(overrides?: {
@@ -61,11 +61,11 @@ function createMockContext(overrides?: {
 
 async function emitPngMediaToolResult(
   ctx: EmbeddedPiSubscribeContext,
-  opts?: { isError?: boolean },
+  opts?: { isError?: boolean; toolName?: string },
 ) {
   await handleToolExecutionEnd(ctx, {
     type: "tool_execution_end",
-    toolName: "browser",
+    toolName: opts?.toolName ?? "canvas",
     toolCallId: "tc-1",
     isError: opts?.isError ?? false,
     result: {
@@ -127,6 +127,15 @@ describe("handleToolExecutionEnd media emission", () => {
     expect(onToolResult).not.toHaveBeenCalled();
   });
 
+  it("does NOT auto-emit media for browser screenshot tool results", async () => {
+    const onToolResult = vi.fn();
+    const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult });
+
+    await emitPngMediaToolResult(ctx, { toolName: "browser" });
+
+    expect(onToolResult).not.toHaveBeenCalled();
+  });
+
   it("emits remote media for untrusted tools", async () => {
     const onToolResult = vi.fn();
     const ctx = createMockContext({ shouldEmitToolOutput: false, onToolResult });
@@ -137,7 +146,6 @@ describe("handleToolExecutionEnd media emission", () => {
       mediaUrls: ["https://example.com/file.png"],
     });
   });
-
   it("does NOT emit media when verbose is full (emitToolOutput handles it)", async () => {
     const onToolResult = vi.fn();
     const ctx = createMockContext({ shouldEmitToolOutput: true, onToolResult });
