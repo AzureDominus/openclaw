@@ -156,9 +156,8 @@ const ERROR_PAYLOAD_PREFIX_RE =
   /^(?:error|api\s*error|apierror|openai\s*error|anthropic\s*error|gateway\s*error)[:\s-]+/i;
 const FINAL_TAG_RE = /<\s*\/?\s*final\s*>/gi;
 const FAILED_TOOL_CALL_DRAFT_MARKER_RE =
-  /(?:[+#]{4,}\s*)?assistant\s+to=(?:functions\.[a-zA-Z0-9_]+|multi_tool_use\.parallel)\b/i;
-const FAILED_TOOL_CALL_DRAFT_HINT_RE =
-  /(?:^\s*```(?:json)?\s*$)|(?:^\s*[{[]\s*$)|(?:"(?:command|tool_uses|parameters)"\s*:)/im;
+  /(?:\+#[+#]{2,}\s*)assistant\s+to=(?:functions\.[a-zA-Z0-9_]+|multi_tool_use\.parallel)\b/i;
+const FAILED_TOOL_CALL_DRAFT_JSON_AFTER_RE = /(?:^|[\r\n])\s*(?:```(?:json)?\s*[\r\n])?\s*[{[]/im;
 const ERROR_PREFIX_RE =
   /^(?:error|api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|request failed|failed|exception)[:\s-]+/i;
 const CONTEXT_OVERFLOW_ERROR_HEAD_RE =
@@ -249,16 +248,14 @@ function stripFailedToolCallDraftFromText(text: string): string {
   if (!marker || marker.index == null) {
     return text;
   }
-  const markerIndex = marker.index;
-  const tail = text.slice(markerIndex);
-  if (!FAILED_TOOL_CALL_DRAFT_HINT_RE.test(tail)) {
+  const markerStart = marker.index;
+  const markerEnd = markerStart + marker[0].length;
+  const afterMarker = text.slice(markerEnd);
+  if (!FAILED_TOOL_CALL_DRAFT_JSON_AFTER_RE.test(afterMarker)) {
     return text;
   }
-  // Keep valid prose before the leak; strip from the leaked `+#+#+#+#+...assistant to=...` tail.
-  const prefix = /[+#]{4,}\s*$/.exec(text.slice(0, markerIndex));
-  const stripStart = prefix ? markerIndex - prefix[0].length : markerIndex;
   return text
-    .slice(0, stripStart)
+    .slice(0, markerStart)
     .replace(/[ \t]+\r?\n/g, "\n")
     .trimEnd();
 }

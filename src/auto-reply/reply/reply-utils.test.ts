@@ -116,6 +116,15 @@ describe("normalizeReplyPayload", () => {
     expect(normalized?.text).toBe("Working on it.");
   });
 
+  it("strips leaked browser tool-call drafts by default", () => {
+    const normalized = normalizeReplyPayload({
+      text:
+        "Found it. I’m entering the newest code and submitting now. +#+#+#+#+assistant to=functions.browser մեկնաբանություն ppjson\n" +
+        '{"action":"act","target":"host","targetId":"2879529FB8891C7A057C32D61626AA0B","request":{"kind":"type","ref":"e3","text":"433848"}}',
+    });
+    expect(normalized?.text).toBe("Found it. I’m entering the newest code and submitting now.");
+  });
+
   it("can preserve leaked plain-text tool-call drafts when explicitly disabled", () => {
     const normalized = normalizeReplyPayload(
       {
@@ -126,6 +135,20 @@ describe("normalizeReplyPayload", () => {
       },
     );
     expect(normalized?.text).toContain("assistant to=functions.exec");
+  });
+
+  it("can preserve leaked browser drafts when explicitly disabled", () => {
+    const normalized = normalizeReplyPayload(
+      {
+        text:
+          "Found it. I’m entering the newest code and submitting now. +#+#+#+#+assistant to=functions.browser մեկնաբանություն ppjson\n" +
+          '{"action":"act","target":"host","targetId":"2879529FB8891C7A057C32D61626AA0B","request":{"kind":"type","ref":"e3","text":"433848"}}',
+      },
+      {
+        stripFailedToolCallDraft: false,
+      },
+    );
+    expect(normalized?.text).toContain("assistant to=functions.browser");
   });
 });
 
