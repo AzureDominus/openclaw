@@ -35,6 +35,24 @@ export type WhatsAppAckReactionConfig = {
   group?: "always" | "mentions" | "never";
 };
 
+export type WhatsAppImageAutoDocumentConfig = {
+  /**
+   * In auto mode, send browser screenshots as document when image bytes exceed this value.
+   * Default: 20 MB.
+   */
+  maxBytes?: number;
+  /**
+   * In auto mode, send browser screenshots as document when max side exceeds this value.
+   * Default: disabled.
+   */
+  browserMaxSide?: number;
+  /**
+   * In auto mode, send browser screenshots as document when total pixels exceed this value.
+   * Default: disabled.
+   */
+  browserMaxPixels?: number;
+};
+
 export type WhatsAppConfig = {
   /** Optional per-account WhatsApp configuration (multi-account). */
   accounts?: Record<string, WhatsAppAccountConfig>;
@@ -97,6 +115,8 @@ export type WhatsAppConfig = {
    * - "auto": send browser screenshots as document, others as image
    */
   imageUploadMode?: "image" | "document" | "auto";
+  /** Auto-mode thresholds for deciding when browser screenshots should be sent as documents. */
+  imageAutoDocument?: WhatsAppImageAutoDocumentConfig;
   /** Disable block streaming for this account. */
   blockStreaming?: boolean;
   /** Merge streamed block replies before sending. */
@@ -152,6 +172,8 @@ export type WhatsAppAccountConfig = {
   mediaMaxMb?: number;
   /** Outbound image upload mode ("image" | "document" | "auto"). */
   imageUploadMode?: "image" | "document" | "auto";
+  /** Auto-mode thresholds for deciding when browser screenshots should be sent as documents. */
+  imageAutoDocument?: WhatsAppImageAutoDocumentConfig;
   blockStreaming?: boolean;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;

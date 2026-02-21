@@ -31,6 +31,15 @@ const WhatsAppAckReactionSchema = z
   .strict()
   .optional();
 
+const WhatsAppImageAutoDocumentSchema = z
+  .object({
+    maxBytes: z.number().int().nonnegative().optional(),
+    browserMaxSide: z.number().int().nonnegative().optional(),
+    browserMaxPixels: z.number().int().nonnegative().optional(),
+  })
+  .strict()
+  .optional();
+
 const WhatsAppSharedSchema = z.object({
   capabilities: z.array(z.string()).optional(),
   markdown: MarkdownConfigSchema,
@@ -50,6 +59,7 @@ const WhatsAppSharedSchema = z.object({
   textChunkLimit: z.number().int().positive().optional(),
   chunkMode: z.enum(["length", "newline"]).optional(),
   imageUploadMode: z.enum(["image", "document", "auto"]).optional(),
+  imageAutoDocument: WhatsAppImageAutoDocumentSchema,
   blockStreaming: z.boolean().optional(),
   blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
   groups: WhatsAppGroupsSchema,

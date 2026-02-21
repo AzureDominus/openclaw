@@ -25,6 +25,7 @@ export type ResolvedWhatsAppAccount = {
   chunkMode?: "length" | "newline";
   mediaMaxMb?: number;
   imageUploadMode?: "image" | "document" | "auto";
+  imageAutoDocument?: WhatsAppAccountConfig["imageAutoDocument"];
   blockStreaming?: boolean;
   ackReaction?: WhatsAppAccountConfig["ackReaction"];
   groups?: WhatsAppAccountConfig["groups"];
@@ -128,6 +129,13 @@ export function resolveWhatsAppAccount(params: {
     cfg: params.cfg,
     accountId,
   });
+  const imageAutoDocument =
+    rootCfg?.imageAutoDocument || accountCfg?.imageAutoDocument
+      ? {
+          ...rootCfg?.imageAutoDocument,
+          ...accountCfg?.imageAutoDocument,
+        }
+      : undefined;
   return {
     accountId,
     name: accountCfg?.name?.trim() || undefined,
@@ -146,6 +154,7 @@ export function resolveWhatsAppAccount(params: {
     chunkMode: accountCfg?.chunkMode ?? rootCfg?.chunkMode,
     mediaMaxMb: accountCfg?.mediaMaxMb ?? rootCfg?.mediaMaxMb,
     imageUploadMode: accountCfg?.imageUploadMode ?? rootCfg?.imageUploadMode,
+    imageAutoDocument,
     blockStreaming: accountCfg?.blockStreaming ?? rootCfg?.blockStreaming,
     ackReaction: accountCfg?.ackReaction ?? rootCfg?.ackReaction,
     groups: accountCfg?.groups ?? rootCfg?.groups,
