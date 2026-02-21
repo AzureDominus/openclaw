@@ -1,6 +1,7 @@
 import { formatCliCommand } from "../cli/command-format.js";
 import { loadConfig } from "../config/config.js";
 import { isLoopbackHost } from "../gateway/net.js";
+import { extractErrorCode, formatErrorMessage } from "../infra/errors.js";
 import { getBridgeAuthForPort } from "./bridge-auth-registry.js";
 import { resolveBrowserControlAuth } from "./control-auth.js";
 import {
@@ -102,6 +103,22 @@ const BROWSER_TOOL_MODEL_HINT =
   "Do NOT retry the browser tool — it will keep failing. " +
   "Use an alternative approach or inform the user that the browser is currently unavailable.";
 
+const CONNECTIVITY_ERROR_CODES = new Set([
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "EPIPE",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "ETIMEDOUT",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_CONNECT_ERROR",
+  "UND_ERR_SOCKET",
+  "ERR_NETWORK",
+  "ERR_SOCKET_CLOSED",
+]);
+const PLAYWRIGHT_UNAVAILABLE_MARKER = "playwright is not available in this gateway build";
+const TRANSIENT_PLAYWRIGHT_RETRY_DELAY_MS = 200;
+
 function resolveBrowserFetchOperatorHint(url: string): string {
   const isLocal = !isAbsoluteHttp(url);
   return isLocal
@@ -130,9 +147,28 @@ function enhanceDispatcherPathError(url: string, err: unknown): Error {
   return new Error(`${normalized} ${suffix}`, err instanceof Error ? { cause: err } : undefined);
 }
 
-function enhanceBrowserFetchError(url: string, err: unknown, timeoutMs: number): Error {
-  const operatorHint = resolveBrowserFetchOperatorHint(url);
-  const msg = String(err);
+function isLikelyConnectivityError(err: unknown, msgLower: string): boolean {
+  const code = extractErrorCode(err);
+  if (code && CONNECTIVITY_ERROR_CODES.has(code.toUpperCase())) {
+    return true;
+  }
+
+  return (
+    msgLower.includes("fetch failed") ||
+    msgLower.includes("networkerror") ||
+    msgLower.includes("socket hang up") ||
+    msgLower.includes("connection refused") ||
+    msgLower.includes("connect econnrefused") ||
+    msgLower.includes("connect etimedout") ||
+    msgLower.includes("econnrefused") ||
+    msgLower.includes("econnreset") ||
+    msgLower.includes("enotfound") ||
+    msgLower.includes("eai_again")
+  );
+}
+
+function enhanceBrowserFetchError(_url: string, err: unknown, timeoutMs: number): Error {
+  const msg = formatErrorMessage(err).trim() || String(err).trim();
   const msgLower = msg.toLowerCase();
   const looksLikeTimeout =
     msgLower.includes("timed out") ||
@@ -140,8 +176,14 @@ function enhanceBrowserFetchError(url: string, err: unknown, timeoutMs: number):
     msgLower.includes("aborted") ||
     msgLower.includes("abort") ||
     msgLower.includes("aborterror");
+  const looksLikeConnectivity = isLikelyConnectivityError(err, msgLower);
+  const retryGuidance =
+    "Do NOT retry the browser tool automatically. " +
+    "Ask the user whether they want to try the browser step again or continue with an alternative approach.";
+
   if (looksLikeTimeout) {
     return new Error(
+<<<<<<< HEAD
       appendBrowserToolModelHint(
         `Can't reach the OpenClaw browser control service (timed out after ${timeoutMs}ms). ${operatorHint}`,
       ),
@@ -152,6 +194,32 @@ function enhanceBrowserFetchError(url: string, err: unknown, timeoutMs: number):
       `Can't reach the OpenClaw browser control service. ${operatorHint} (${msg})`,
     ),
   );
+=======
+      `Browser tool is currently unavailable (timed out after ${timeoutMs}ms). ${retryGuidance}`,
+    );
+  }
+  if (looksLikeConnectivity) {
+    return new Error(`Browser tool is currently unavailable. ${retryGuidance} (${msg})`);
+  }
+
+  if (msgLower.includes("browser control disabled")) {
+    return new Error(
+      "Browser tool is disabled in this gateway configuration. " +
+        "Ask the user whether they want to try again later or continue with an alternative approach.",
+    );
+  }
+  if (msgLower.includes(PLAYWRIGHT_UNAVAILABLE_MARKER)) {
+    return new Error(
+      "Browser tool appears unavailable after retry. " +
+        "Ask the user whether they want to try the browser step again later or continue with an alternative approach.",
+    );
+  }
+
+  if (err instanceof Error) {
+    return err;
+  }
+  return new Error(msg || "Browser tool request failed.");
+>>>>>>> 77d970578 (browser: retry transient playwright gaps and improve tool error guidance)
 }
 
 async function fetchHttpJson<T>(
@@ -190,6 +258,14 @@ async function fetchHttpJson<T>(
 export async function fetchBrowserJson<T>(
   url: string,
   init?: RequestInit & { timeoutMs?: number },
+): Promise<T> {
+  return await fetchBrowserJsonInternal(url, init, 1);
+}
+
+async function fetchBrowserJsonInternal<T>(
+  url: string,
+  init: (RequestInit & { timeoutMs?: number }) | undefined,
+  transientPlaywrightRetriesRemaining: number,
 ): Promise<T> {
   const timeoutMs = init?.timeoutMs ?? 5000;
   let isDispatcherPath = false;
@@ -273,6 +349,14 @@ export async function fetchBrowserJson<T>(
         result.body && typeof result.body === "object" && "error" in result.body
           ? String((result.body as { error?: unknown }).error)
           : `HTTP ${result.status}`;
+      const isPlaywrightTemporarilyUnavailable =
+        result.status === 501 &&
+        message.toLowerCase().includes(PLAYWRIGHT_UNAVAILABLE_MARKER) &&
+        transientPlaywrightRetriesRemaining > 0;
+      if (isPlaywrightTemporarilyUnavailable) {
+        await new Promise((resolve) => setTimeout(resolve, TRANSIENT_PLAYWRIGHT_RETRY_DELAY_MS));
+        return await fetchBrowserJsonInternal(url, init, transientPlaywrightRetriesRemaining - 1);
+      }
       throw new BrowserServiceError(message);
     }
     return result.body as T;
