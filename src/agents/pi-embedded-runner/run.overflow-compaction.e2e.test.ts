@@ -724,6 +724,42 @@ describe("overflow compaction in run loop", () => {
     );
   });
 
+  it("keeps block progress callbacks enabled during continue-guard retries when partial callbacks are unavailable", async () => {
+    mockedBuildEmbeddedRunPayloads.mockImplementation((params) =>
+      (params.assistantTexts ?? []).map((text) => ({ text })),
+    );
+    const onBlockReply = vi.fn();
+
+    mockedRunEmbeddedAttempt
+      .mockImplementationOnce(async (params) => {
+        await params.onBlockReply?.({ text: "Initial progress." });
+        return makeAttemptResult({
+          assistantTexts: ["Initial progress."],
+          lastAssistant: { stopReason: "end_turn" } as EmbeddedRunAttemptResult["lastAssistant"],
+          toolMetas: [],
+        });
+      })
+      .mockImplementationOnce(async (params) => {
+        await params.onBlockReply?.({ text: "Guard retry progress." });
+        return makeAttemptResult({
+          assistantTexts: ["OPENCLAW_STOP_REASON: completed"],
+          lastAssistant: { stopReason: "end_turn" } as EmbeddedRunAttemptResult["lastAssistant"],
+          toolMetas: [],
+        });
+      });
+
+    await runEmbeddedPiAgent({
+      ...baseParams,
+      onBlockReply,
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(mockedRunEmbeddedAttempt.mock.calls[1]?.[0]?.onBlockReply).toEqual(expect.any(Function));
+    expect(onBlockReply).toHaveBeenCalledTimes(2);
+    expect(onBlockReply).toHaveBeenNthCalledWith(1, { text: "Initial progress." });
+    expect(onBlockReply).toHaveBeenNthCalledWith(2, { text: "Guard retry progress." });
+  });
+
   it("does not preserve malformed pseudo tool-call text as continue-guard fallback payload", async () => {
     mockedBuildEmbeddedRunPayloads.mockImplementation((params) =>
       (params.assistantTexts ?? []).map((text) => ({ text })),

@@ -632,6 +632,13 @@ export async function runEmbeddedPiAgent(
                   });
                 }
               : params.onPartialReply;
+          // Continue-guard retries used to suppress all block/reasoning callbacks to
+          // avoid duplicate preview behavior in streaming surfaces. That makes
+          // `streamMode: off` channels lose progress updates entirely (no partial
+          // callback path exists there), so only suppress these callbacks when a
+          // partial streaming surface is active.
+          const suppressContinueGuardSurfaceCallbacks =
+            isContinueGuardAttempt && Boolean(params.onPartialReply);
 
           const attempt = await runEmbeddedAttempt({
             sessionId: params.sessionId,
@@ -676,15 +683,21 @@ export async function runEmbeddedPiAgent(
             shouldEmitToolResult: params.shouldEmitToolResult,
             shouldEmitToolOutput: params.shouldEmitToolOutput,
             onPartialReply: onPartialReplyForAttempt,
-            onAssistantMessageStart: isContinueGuardAttempt
+            onAssistantMessageStart: suppressContinueGuardSurfaceCallbacks
               ? undefined
               : params.onAssistantMessageStart,
-            onBlockReply: isContinueGuardAttempt ? undefined : params.onBlockReply,
-            onBlockReplyFlush: isContinueGuardAttempt ? undefined : params.onBlockReplyFlush,
+            onBlockReply: suppressContinueGuardSurfaceCallbacks ? undefined : params.onBlockReply,
+            onBlockReplyFlush: suppressContinueGuardSurfaceCallbacks
+              ? undefined
+              : params.onBlockReplyFlush,
             blockReplyBreak: params.blockReplyBreak,
             blockReplyChunking: params.blockReplyChunking,
-            onReasoningStream: isContinueGuardAttempt ? undefined : params.onReasoningStream,
-            onReasoningEnd: isContinueGuardAttempt ? undefined : params.onReasoningEnd,
+            onReasoningStream: suppressContinueGuardSurfaceCallbacks
+              ? undefined
+              : params.onReasoningStream,
+            onReasoningEnd: suppressContinueGuardSurfaceCallbacks
+              ? undefined
+              : params.onReasoningEnd,
             onToolResult: params.onToolResult,
             onAgentEvent: params.onAgentEvent,
             extraSystemPrompt: params.extraSystemPrompt,
