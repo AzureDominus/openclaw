@@ -90,6 +90,13 @@ export type WhatsAppConfig = {
   chunkMode?: "length" | "newline";
   /** Maximum media file size in MB. Default: 50. */
   mediaMaxMb?: number;
+  /**
+   * Outbound image upload mode:
+   * - "image": always send as image (platform compression may apply)
+   * - "document": always send as document (max fidelity)
+   * - "auto": send browser screenshots as document, others as image
+   */
+  imageUploadMode?: "image" | "document" | "auto";
   /** Disable block streaming for this account. */
   blockStreaming?: boolean;
   /** Merge streamed block replies before sending. */
@@ -143,6 +150,8 @@ export type WhatsAppAccountConfig = {
   /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
   chunkMode?: "length" | "newline";
   mediaMaxMb?: number;
+  /** Outbound image upload mode ("image" | "document" | "auto"). */
+  imageUploadMode?: "image" | "document" | "auto";
   blockStreaming?: boolean;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;

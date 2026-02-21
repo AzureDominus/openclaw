@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveOAuthDir } from "../config/paths.js";
 import type { DmPolicy, GroupPolicy, WhatsAppAccountConfig } from "../config/types.js";
+import { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
+import { resolveOAuthDir } from "../config/paths.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
 import { hasWebCredsSync } from "./auth-store.js";
@@ -24,6 +24,7 @@ export type ResolvedWhatsAppAccount = {
   textChunkLimit?: number;
   chunkMode?: "length" | "newline";
   mediaMaxMb?: number;
+  imageUploadMode?: "image" | "document" | "auto";
   blockStreaming?: boolean;
   ackReaction?: WhatsAppAccountConfig["ackReaction"];
   groups?: WhatsAppAccountConfig["groups"];
@@ -144,6 +145,7 @@ export function resolveWhatsAppAccount(params: {
     textChunkLimit: accountCfg?.textChunkLimit ?? rootCfg?.textChunkLimit,
     chunkMode: accountCfg?.chunkMode ?? rootCfg?.chunkMode,
     mediaMaxMb: accountCfg?.mediaMaxMb ?? rootCfg?.mediaMaxMb,
+    imageUploadMode: accountCfg?.imageUploadMode ?? rootCfg?.imageUploadMode,
     blockStreaming: accountCfg?.blockStreaming ?? rootCfg?.blockStreaming,
     ackReaction: accountCfg?.ackReaction ?? rootCfg?.ackReaction,
     groups: accountCfg?.groups ?? rootCfg?.groups,
