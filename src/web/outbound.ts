@@ -7,6 +7,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { convertMarkdownTables } from "../markdown/tables.js";
 import { markdownToWhatsApp } from "../markdown/whatsapp.js";
 import { isLikelyBrowserScreenshotMediaUrl } from "../media/browser-screenshot.js";
+import { getImageMetadata } from "../media/image-ops.js";
 import { normalizePollInput, type PollInput } from "../polls.js";
 import { toWhatsappJid } from "../utils.js";
 import { resolveWhatsAppAccount } from "./accounts.js";
@@ -14,8 +15,35 @@ import { type ActiveWebSendOptions, requireActiveWebListener } from "./active-li
 import { loadWebMedia } from "./media.js";
 
 const outboundLog = createSubsystemLogger("gateway/channels/whatsapp").child("outbound");
-const WHATSAPP_OVERSIZE_DOC_MAX_BYTES = 5 * 1024 * 1024;
+const WHATSAPP_AUTO_DOC_DEFAULT_MAX_BYTES = 20 * 1024 * 1024;
 const MB = 1024 * 1024;
+
+type WhatsAppImageAutoDocumentPolicy = {
+  maxBytes: number;
+  browserMaxSide: number;
+  browserMaxPixels: number;
+};
+
+function resolveWhatsAppImageAutoDocumentPolicy(params: {
+  account: ReturnType<typeof resolveWhatsAppAccount>;
+}): WhatsAppImageAutoDocumentPolicy {
+  const auto = params.account.imageAutoDocument;
+  const maxBytes =
+    typeof auto?.maxBytes === "number" && Number.isFinite(auto.maxBytes)
+      ? Math.max(0, Math.floor(auto.maxBytes))
+      : WHATSAPP_AUTO_DOC_DEFAULT_MAX_BYTES;
+  return {
+    maxBytes,
+    browserMaxSide:
+      typeof auto?.browserMaxSide === "number" && Number.isFinite(auto.browserMaxSide)
+        ? Math.max(0, Math.floor(auto.browserMaxSide))
+        : 0,
+    browserMaxPixels:
+      typeof auto?.browserMaxPixels === "number" && Number.isFinite(auto.browserMaxPixels)
+        ? Math.max(0, Math.floor(auto.browserMaxPixels))
+        : 0,
+  };
+}
 
 function resolveWhatsAppMaxBytes(params: {
   cfg: ReturnType<typeof loadConfig>;
@@ -33,6 +61,7 @@ async function shouldSendWhatsAppImageAsDocument(params: {
   mode: "image" | "auto" | "document";
   mediaUrl?: string;
   buffer: Buffer;
+  policy: WhatsAppImageAutoDocumentPolicy;
 }): Promise<boolean> {
   if (params.mode === "document") {
     return true;
@@ -43,7 +72,24 @@ async function shouldSendWhatsAppImageAsDocument(params: {
   if (!isLikelyBrowserScreenshotMediaUrl(params.mediaUrl)) {
     return false;
   }
-  return params.buffer.byteLength > WHATSAPP_OVERSIZE_DOC_MAX_BYTES;
+  if (params.policy.maxBytes > 0 && params.buffer.byteLength > params.policy.maxBytes) {
+    return true;
+  }
+  if (params.policy.browserMaxSide <= 0 && params.policy.browserMaxPixels <= 0) {
+    return false;
+  }
+  const meta = await getImageMetadata(params.buffer).catch(() => null);
+  const width = Number(meta?.width ?? 0);
+  const height = Number(meta?.height ?? 0);
+  if (width <= 0 || height <= 0) {
+    return false;
+  }
+  const maxSide = Math.max(width, height);
+  const pixels = width * height;
+  if (params.policy.browserMaxSide > 0 && maxSide > params.policy.browserMaxSide) {
+    return true;
+  }
+  return params.policy.browserMaxPixels > 0 && pixels > params.policy.browserMaxPixels;
 }
 
 export async function sendMessageWhatsApp(
@@ -73,6 +119,7 @@ export async function sendMessageWhatsApp(
       accountId: resolvedAccountId,
     });
   const imageUploadMode = account.imageUploadMode ?? "auto";
+  const imageAutoDocumentPolicy = resolveWhatsAppImageAutoDocumentPolicy({ account });
   const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "whatsapp",
@@ -115,6 +162,7 @@ export async function sendMessageWhatsApp(
           mode: imageUploadMode,
           mediaUrl: options.mediaUrl,
           buffer: media.buffer,
+          policy: imageAutoDocumentPolicy,
         });
         if (sendImageAsDocument) {
           documentFileName = media.fileName;

@@ -42,6 +42,34 @@ export type TelegramCapabilitiesConfig =
       inlineButtons?: TelegramInlineButtonsScope;
     };
 
+export type TelegramImageAutoDocumentConfig = {
+  /**
+   * In auto mode, send as document when image bytes exceed this value.
+   * Default: 10 MB.
+   */
+  maxBytes?: number;
+  /**
+   * In auto mode, send as document when width + height exceeds this value.
+   * Default: 10000.
+   */
+  maxDimensionSum?: number;
+  /**
+   * In auto mode, send as document when aspect ratio exceeds this value.
+   * Default: 20.
+   */
+  maxAspectRatio?: number;
+  /**
+   * In auto mode, for browser screenshots only, send as document when max side exceeds this value.
+   * Default: 3000.
+   */
+  browserMaxSide?: number;
+  /**
+   * In auto mode, for browser screenshots only, send as document when total pixels exceed this value.
+   * Default: 5000000.
+   */
+  browserMaxPixels?: number;
+};
+
 /** Custom command definition for Telegram bot menu. */
 export type TelegramCustomCommand = {
   /** Command name (without leading /). */
@@ -128,6 +156,8 @@ export type TelegramAccountConfig = {
    * - "auto": use document for browser screenshots/photo-unsafe dimensions, else photo
    */
   imageUploadMode?: "photo" | "document" | "auto";
+  /** Auto-mode thresholds for deciding when images should be sent as documents. */
+  imageAutoDocument?: TelegramImageAutoDocumentConfig;
   /** Telegram API client timeout in seconds (grammY ApiClientOptions). */
   timeoutSeconds?: number;
   /** Retry policy for outbound Telegram API calls. */

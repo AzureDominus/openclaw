@@ -52,6 +52,17 @@ const TelegramCapabilitiesSchema = z.union([
     .strict(),
 ]);
 
+const TelegramImageAutoDocumentSchema = z
+  .object({
+    maxBytes: z.number().int().nonnegative().optional(),
+    maxDimensionSum: z.number().int().nonnegative().optional(),
+    maxAspectRatio: z.number().positive().optional(),
+    browserMaxSide: z.number().int().nonnegative().optional(),
+    browserMaxPixels: z.number().int().nonnegative().optional(),
+  })
+  .strict()
+  .optional();
+
 export const TelegramTopicSchema = z
   .object({
     requireMention: z.boolean().optional(),
@@ -156,6 +167,7 @@ export const TelegramAccountSchemaBase = z
     streamMode: z.enum(["off", "partial", "block"]).optional(),
     mediaMaxMb: z.number().positive().optional(),
     imageUploadMode: z.enum(["photo", "document", "auto"]).optional(),
+    imageAutoDocument: TelegramImageAutoDocumentSchema,
     timeoutSeconds: z.number().int().positive().optional(),
     retry: RetryConfigSchema,
     network: z

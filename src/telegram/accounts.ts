@@ -1,7 +1,7 @@
 import util from "node:util";
-import { createAccountActionGate } from "../channels/plugins/account-action-gate.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { TelegramAccountConfig, TelegramActionConfig } from "../config/types.js";
+import { createAccountActionGate } from "../channels/plugins/account-action-gate.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
@@ -87,7 +87,18 @@ function mergeTelegramAccountConfig(cfg: OpenClawConfig, accountId: string): Tel
   const { accounts: _ignored, ...base } = (cfg.channels?.telegram ??
     {}) as TelegramAccountConfig & { accounts?: unknown };
   const account = resolveAccountConfig(cfg, accountId) ?? {};
-  return { ...base, ...account };
+  const mergedImageAutoDocument =
+    base.imageAutoDocument || account.imageAutoDocument
+      ? {
+          ...base.imageAutoDocument,
+          ...account.imageAutoDocument,
+        }
+      : undefined;
+  return {
+    ...base,
+    ...account,
+    ...(mergedImageAutoDocument ? { imageAutoDocument: mergedImageAutoDocument } : {}),
+  };
 }
 
 export function createTelegramActionGate(params: {

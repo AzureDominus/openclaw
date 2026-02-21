@@ -101,10 +101,47 @@ const TELEGRAM_BROWSER_SCREENSHOT_DOC_MAX_SIDE = 3000;
 const TELEGRAM_BROWSER_SCREENSHOT_DOC_MAX_PIXELS = 5_000_000;
 const diagLogger = createSubsystemLogger("telegram/diagnostic");
 
+type TelegramImageAutoDocumentPolicy = {
+  maxBytes: number;
+  maxDimensionSum: number;
+  maxAspectRatio: number;
+  browserMaxSide: number;
+  browserMaxPixels: number;
+};
+
+function resolveTelegramImageAutoDocumentPolicy(params: {
+  config?: ResolvedTelegramAccount["config"];
+}): TelegramImageAutoDocumentPolicy {
+  const auto = params.config?.imageAutoDocument;
+  return {
+    maxBytes:
+      typeof auto?.maxBytes === "number" && Number.isFinite(auto.maxBytes)
+        ? Math.max(0, Math.floor(auto.maxBytes))
+        : TELEGRAM_PHOTO_MAX_BYTES,
+    maxDimensionSum:
+      typeof auto?.maxDimensionSum === "number" && Number.isFinite(auto.maxDimensionSum)
+        ? Math.max(0, Math.floor(auto.maxDimensionSum))
+        : TELEGRAM_PHOTO_MAX_DIM_SUM,
+    maxAspectRatio:
+      typeof auto?.maxAspectRatio === "number" && Number.isFinite(auto.maxAspectRatio)
+        ? Math.max(0, auto.maxAspectRatio)
+        : TELEGRAM_PHOTO_MAX_ASPECT_RATIO,
+    browserMaxSide:
+      typeof auto?.browserMaxSide === "number" && Number.isFinite(auto.browserMaxSide)
+        ? Math.max(0, Math.floor(auto.browserMaxSide))
+        : TELEGRAM_BROWSER_SCREENSHOT_DOC_MAX_SIDE,
+    browserMaxPixels:
+      typeof auto?.browserMaxPixels === "number" && Number.isFinite(auto.browserMaxPixels)
+        ? Math.max(0, Math.floor(auto.browserMaxPixels))
+        : TELEGRAM_BROWSER_SCREENSHOT_DOC_MAX_PIXELS,
+  };
+}
+
 async function shouldSendTelegramImageAsDocument(params: {
   mode?: "photo" | "auto" | "document";
   buffer: Buffer;
   mediaUrl?: string;
+  policy: TelegramImageAutoDocumentPolicy;
 }): Promise<boolean> {
   const mode = params.mode ?? "auto";
   if (mode === "document") {
@@ -113,7 +150,7 @@ async function shouldSendTelegramImageAsDocument(params: {
   if (mode === "photo") {
     return false;
   }
-  if (params.buffer.byteLength > TELEGRAM_PHOTO_MAX_BYTES) {
+  if (params.policy.maxBytes > 0 && params.buffer.byteLength > params.policy.maxBytes) {
     return true;
   }
   const meta = await getImageMetadata(params.buffer).catch(() => null);
@@ -126,17 +163,17 @@ async function shouldSendTelegramImageAsDocument(params: {
     const maxSide = Math.max(width, height);
     const pixels = width * height;
     if (
-      maxSide > TELEGRAM_BROWSER_SCREENSHOT_DOC_MAX_SIDE ||
-      pixels > TELEGRAM_BROWSER_SCREENSHOT_DOC_MAX_PIXELS
+      (params.policy.browserMaxSide > 0 && maxSide > params.policy.browserMaxSide) ||
+      (params.policy.browserMaxPixels > 0 && pixels > params.policy.browserMaxPixels)
     ) {
       return true;
     }
   }
-  if (width + height > TELEGRAM_PHOTO_MAX_DIM_SUM) {
+  if (params.policy.maxDimensionSum > 0 && width + height > params.policy.maxDimensionSum) {
     return true;
   }
   const ratio = Math.max(width, height) / Math.max(1, Math.min(width, height));
-  return ratio > TELEGRAM_PHOTO_MAX_ASPECT_RATIO;
+  return params.policy.maxAspectRatio > 0 && ratio > params.policy.maxAspectRatio;
 }
 
 function createTelegramHttpLogger(cfg: ReturnType<typeof loadConfig>) {
@@ -603,12 +640,16 @@ export async function sendMessageTelegram(
       fileName: media.fileName,
     });
     const imageUploadMode = account.config.imageUploadMode ?? "auto";
+    const imageAutoDocumentPolicy = resolveTelegramImageAutoDocumentPolicy({
+      config: account.config,
+    });
     const sendImageAsDocument =
       kind === "image"
         ? await shouldSendTelegramImageAsDocument({
             mode: imageUploadMode,
             buffer: media.buffer,
             mediaUrl,
+            policy: imageAutoDocumentPolicy,
           })
         : false;
     const isVideoNote = kind === "video" && opts.asVideoNote === true;

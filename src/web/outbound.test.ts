@@ -155,7 +155,7 @@ describe("web outbound", () => {
   });
 
   it("sends oversized browser screenshots as documents in auto mode", async () => {
-    const buf = Buffer.alloc(5 * 1024 * 1024 + 1);
+    const buf = Buffer.alloc(20 * 1024 * 1024 + 1);
     loadConfigMock.mockReturnValue({
       channels: { whatsapp: { imageUploadMode: "auto" } },
     });
@@ -223,6 +223,65 @@ describe("web outbound", () => {
     });
 
     expect(sendMessage).toHaveBeenLastCalledWith("+1555", "pic", buf, "image/png");
+  });
+
+  it("honors configured WhatsApp auto maxBytes gate", async () => {
+    const buf = Buffer.alloc(2 * 1024);
+    loadConfigMock.mockReturnValue({
+      channels: {
+        whatsapp: {
+          imageUploadMode: "auto",
+          imageAutoDocument: { maxBytes: 1 },
+        },
+      },
+    });
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: buf,
+      contentType: "image/jpeg",
+      kind: "image",
+      fileName: "shot.jpg",
+    });
+
+    await sendMessageWhatsApp("+1555", "pic", {
+      verbose: false,
+      mediaUrl: "/home/user/.openclaw/media/browser/shot.jpg",
+    });
+
+    expect(sendMessage).toHaveBeenLastCalledWith(
+      "+1555",
+      "pic",
+      expect.any(Buffer),
+      "image/jpeg",
+      expect.objectContaining({
+        sendImageAsDocument: true,
+        fileName: "shot.jpg",
+      }),
+    );
+  });
+
+  it("treats zero WhatsApp auto gates as disabled", async () => {
+    const buf = Buffer.alloc(2 * 1024);
+    loadConfigMock.mockReturnValue({
+      channels: {
+        whatsapp: {
+          imageUploadMode: "auto",
+          imageAutoDocument: { maxBytes: 0, browserMaxSide: 0, browserMaxPixels: 0 },
+        },
+      },
+    });
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: buf,
+      contentType: "image/jpeg",
+      kind: "image",
+      fileName: "shot.jpg",
+    });
+
+    await sendMessageWhatsApp("+1555", "pic", {
+      verbose: false,
+      mediaUrl: "/home/user/.openclaw/media/browser/shot.jpg",
+    });
+
+    expect(sendMessage).toHaveBeenLastCalledWith("+1555", "pic", expect.any(Buffer), "image/jpeg");
   });
 
   it("maps other kinds to document with filename", async () => {
