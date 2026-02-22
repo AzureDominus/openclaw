@@ -960,6 +960,18 @@ export const FIELD_HELP: Record<string, string> = {
     'Include absolute timestamps in message envelopes ("on" or "off").',
   "agents.defaults.envelopeElapsed": 'Include elapsed time in message envelopes ("on" or "off").',
   "agents.defaults.models": "Configured model catalog (keys are full provider/model IDs).",
+  "agents.defaults.models.*.retry":
+    "Per-model retry policy applied before moving to the next fallback model.",
+  "agents.defaults.models.*.retry.maxRetries":
+    "Retry count before fallback (0 disables retries for that model).",
+  "agents.defaults.models.*.retry.initialBackoffSeconds":
+    "Initial retry cooldown in seconds (default: 60).",
+  "agents.defaults.models.*.retry.backoffFactor":
+    "Exponential multiplier between retries (default: 2).",
+  "agents.defaults.models.*.retry.maxBackoffSeconds":
+    "Maximum retry backoff in seconds (default: 600).",
+  "agents.defaults.models.*.retry.reasons":
+    'Failover reasons that should retry this model (default: ["rate_limit"]).',
   "agents.defaults.memorySearch":
     "Vector search over MEMORY.md and memory/*.md (per-agent overrides supported).",
   "agents.defaults.memorySearch.enabled":

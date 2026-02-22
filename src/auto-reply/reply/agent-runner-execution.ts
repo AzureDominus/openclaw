@@ -12,7 +12,11 @@ import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-bu
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionBinding } from "../../agents/cli-session.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
-import { runWithModelFallback, isFallbackSummaryError } from "../../agents/model-fallback.js";
+import {
+  runWithModelFallback,
+  isFallbackSummaryError,
+  type ModelRetryScheduledEvent,
+} from "../../agents/model-fallback.js";
 import {
   isCliRuntimeAlias,
   resolveCliRuntimeExecutionProvider,
@@ -42,6 +46,7 @@ import {
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { formatDurationCompact } from "../../infra/format-time/format-duration.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
@@ -955,10 +960,31 @@ export async function runAgentTurnWithFallback(params: {
           })
         : undefined;
       const onToolResult = params.opts?.onToolResult;
+      const sendRetryNotice = async (event: ModelRetryScheduledEvent): Promise<void> => {
+        if (params.isHeartbeat) {
+          return;
+        }
+        const waitLabel =
+          formatDurationCompact(event.waitMs, { spaced: true }) ??
+          `${Math.max(1, Math.round(event.waitMs / 1000))}s`;
+        const base = `${event.provider}/${event.model}`;
+        const text =
+          event.reason === "rate_limit"
+            ? `⚠️ ${base} hit a rate limit and is on cooldown${
+                event.source === "cooldown" ? " (all auth profiles cooling down)" : ""
+              }. Retry ${event.retryAttempt}/${event.maxRetries} in ${waitLabel} before fallback.`
+            : `⚠️ ${base} failed (${event.reason}). Retry ${event.retryAttempt}/${event.maxRetries} in ${waitLabel} before fallback.`;
+        if (blockReplyHandler) {
+          await blockReplyHandler({ text });
+          return;
+        }
+        await onToolResult?.({ text });
+      };
       const outcomePlan = buildAgentRuntimeOutcomePlan();
       const fallbackResult = await runWithModelFallback<EmbeddedAgentRunResult>({
         ...resolveModelFallbackOptions(params.followupRun.run),
         runId,
+        onRetryScheduled: sendRetryNotice,
         classifyResult: async ({ result, provider, model }) => {
           const classification = outcomePlan.classifyRunResult({
             result,

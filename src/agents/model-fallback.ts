@@ -25,7 +25,7 @@ import {
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import { logModelFallbackDecision } from "./model-fallback-observation.js";
 import type { FallbackAttempt, ModelCandidate } from "./model-fallback.types.js";
-import { modelKey, normalizeModelRef } from "./model-selection-normalize.js";
+import { modelKey, normalizeModelRef, parseModelRef } from "./model-selection-normalize.js";
 import {
   buildConfiguredAllowlistKeys,
   buildModelAliasIndex,
@@ -72,6 +72,31 @@ type ModelFallbackRunFn<T> = (
   model: string,
   options?: ModelFallbackRunOptions,
 ) => Promise<T>;
+
+type ModelRetryPolicy = {
+  maxRetries: number;
+  initialBackoffMs: number;
+  backoffFactor: number;
+  maxBackoffMs: number;
+  reasons: Set<FailoverReason>;
+};
+
+export type ModelRetryScheduledEvent = {
+  provider: string;
+  model: string;
+  reason: FailoverReason;
+  source: "cooldown" | "error";
+  retryAttempt: number;
+  maxRetries: number;
+  waitMs: number;
+  candidateAttempt: number;
+  totalCandidates: number;
+};
+
+const DEFAULT_MODEL_RETRY_INITIAL_BACKOFF_SECONDS = 60;
+const DEFAULT_MODEL_RETRY_BACKOFF_FACTOR = 2;
+const DEFAULT_MODEL_RETRY_MAX_BACKOFF_SECONDS = 10 * 60;
+const DEFAULT_MODEL_RETRY_REASONS = new Set<FailoverReason>(["rate_limit"]);
 
 /**
  * Fallback abort check. Only treats explicit AbortError names as user aborts.
@@ -396,6 +421,137 @@ function resolveFallbackSoonestCooldownExpiry(params: {
   }
 
   return soonest;
+}
+
+function toPositiveNumber(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function secondsToMs(seconds: number): number {
+  return Math.max(1, Math.round(seconds * 1000));
+}
+
+function toNonnegativeInteger(value: unknown): number {
+  return typeof value === "number" &&
+    Number.isFinite(value) &&
+    Number.isInteger(value) &&
+    value >= 0
+    ? value
+    : 0;
+}
+
+function normalizeRetryReasons(value: unknown): Set<FailoverReason> {
+  if (!Array.isArray(value) || value.length === 0) {
+    return new Set(DEFAULT_MODEL_RETRY_REASONS);
+  }
+  const out = new Set<FailoverReason>();
+  for (const item of value) {
+    if (
+      item === "auth" ||
+      item === "format" ||
+      item === "rate_limit" ||
+      item === "billing" ||
+      item === "timeout" ||
+      item === "unknown"
+    ) {
+      out.add(item);
+    }
+  }
+  return out.size > 0 ? out : new Set(DEFAULT_MODEL_RETRY_REASONS);
+}
+
+function resolveModelRetryPolicy(value: unknown): ModelRetryPolicy | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const maxRetries = toNonnegativeInteger((value as { maxRetries?: unknown }).maxRetries);
+  if (maxRetries <= 0) {
+    return null;
+  }
+  const initialBackoffSeconds = toPositiveNumber(
+    (value as { initialBackoffSeconds?: unknown }).initialBackoffSeconds,
+    DEFAULT_MODEL_RETRY_INITIAL_BACKOFF_SECONDS,
+  );
+  const backoffFactor = toPositiveNumber(
+    (value as { backoffFactor?: unknown }).backoffFactor,
+    DEFAULT_MODEL_RETRY_BACKOFF_FACTOR,
+  );
+  const maxBackoffSeconds = toPositiveNumber(
+    (value as { maxBackoffSeconds?: unknown }).maxBackoffSeconds,
+    DEFAULT_MODEL_RETRY_MAX_BACKOFF_SECONDS,
+  );
+  const initialBackoffMs = secondsToMs(initialBackoffSeconds);
+  const maxBackoffMs = secondsToMs(maxBackoffSeconds);
+
+  return {
+    maxRetries,
+    initialBackoffMs,
+    backoffFactor,
+    maxBackoffMs: Math.max(maxBackoffMs, initialBackoffMs),
+    reasons: normalizeRetryReasons((value as { reasons?: unknown }).reasons),
+  };
+}
+
+function resolveModelRetryPolicyMap(
+  cfg: OpenClawConfig | undefined,
+): Map<string, ModelRetryPolicy> {
+  const out = new Map<string, ModelRetryPolicy>();
+  if (!cfg) {
+    return out;
+  }
+  const configuredPrimary = resolveConfiguredModelRef({
+    cfg,
+    defaultProvider: DEFAULT_PROVIDER,
+    defaultModel: DEFAULT_MODEL,
+  });
+  const defaultProvider = configuredPrimary.provider;
+  const modelEntries = cfg.agents?.defaults?.models ?? {};
+  for (const [rawRef, entry] of Object.entries(modelEntries)) {
+    const parsed = parseModelRef(String(rawRef ?? ""), defaultProvider);
+    if (!parsed || !entry || typeof entry !== "object") {
+      continue;
+    }
+    const retry = resolveModelRetryPolicy((entry as { retry?: unknown }).retry);
+    if (!retry) {
+      continue;
+    }
+    out.set(modelKey(parsed.provider, parsed.model), retry);
+  }
+  return out;
+}
+
+function shouldRetryModelAttempt(params: {
+  policy: ModelRetryPolicy | undefined;
+  reason?: FailoverReason;
+  retriesUsed: number;
+}): boolean {
+  const policy = params.policy;
+  if (!policy || params.retriesUsed >= policy.maxRetries) {
+    return false;
+  }
+  return policy.reasons.has(params.reason ?? "unknown");
+}
+
+function computeRetryDelayMs(params: {
+  policy: ModelRetryPolicy;
+  retryNumber: number;
+  nowMs: number;
+  cooldownUntilMs?: number | null;
+}): number {
+  const exponent = Math.max(0, params.retryNumber - 1);
+  const exponentialBackoffMs = Math.min(
+    params.policy.maxBackoffMs,
+    params.policy.initialBackoffMs * params.policy.backoffFactor ** exponent,
+  );
+  const cooldownRemainingMs =
+    typeof params.cooldownUntilMs === "number" && Number.isFinite(params.cooldownUntilMs)
+      ? Math.max(0, params.cooldownUntilMs - params.nowMs)
+      : 0;
+  return Math.max(1, Math.round(Math.max(exponentialBackoffMs, cooldownRemainingMs)));
+}
+
+function sleepMs(delayMs: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
 function resolveImageFallbackCandidates(params: {
@@ -735,6 +891,7 @@ export async function runWithModelFallback<T>(params: {
   run: ModelFallbackRunFn<T>;
   onError?: ModelFallbackErrorHandler;
   classifyResult?: ModelFallbackResultClassifier<T>;
+  onRetryScheduled?: (event: ModelRetryScheduledEvent) => void | Promise<void>;
 }): Promise<ModelFallbackRunResult<T>> {
   const candidates = resolveFallbackCandidates({
     cfg: params.cfg,
@@ -752,6 +909,7 @@ export async function runWithModelFallback<T>(params: {
   const attempts: FallbackAttempt[] = [];
   let lastError: unknown;
   const cooldownProbeUsedProviders = new Set<string>();
+  const retryPolicyByModel = resolveModelRetryPolicyMap(params.cfg);
 
   const hasFallbackCandidates = candidates.length > 1;
 
@@ -760,75 +918,43 @@ export async function runWithModelFallback<T>(params: {
     const isPrimary = i === 0;
     const requestedModel =
       params.provider === candidate.provider && params.model === candidate.model;
-    let runOptions: ModelFallbackRunOptions | undefined;
-    let attemptedDuringCooldown = false;
-    let transientProbeProviderForAttempt: string | null = null;
-    if (authRuntime && authStore) {
-      const profileIds = authRuntime.resolveAuthProfileOrder({
-        cfg: params.cfg,
-        store: authStore,
-        provider: candidate.provider,
-      });
-      const isAnyProfileAvailable = profileIds.some(
-        (id) => !authRuntime.isProfileInCooldown(authStore, id, undefined, candidate.model),
-      );
-
-      if (profileIds.length > 0 && !isAnyProfileAvailable) {
-        // All profiles for this provider are in cooldown.
-        const now = Date.now();
-        const probeThrottleKey = resolveProbeThrottleKey(candidate.provider, params.agentDir);
-        const decision = resolveCooldownDecision({
-          candidate,
-          isPrimary,
-          requestedModel,
-          hasFallbackCandidates,
-          now,
-          probeThrottleKey,
-          authRuntime,
-          authStore,
-          profileIds,
+    const retryPolicy = retryPolicyByModel.get(modelKey(candidate.provider, candidate.model));
+    let retriesUsed = 0;
+    candidateAttempt: while (true) {
+      let runOptions: ModelFallbackRunOptions | undefined;
+      let attemptedDuringCooldown = false;
+      let transientProbeProviderForAttempt: string | null = null;
+      if (authRuntime && authStore) {
+        const profileIds = authRuntime.resolveAuthProfileOrder({
+          cfg: params.cfg,
+          store: authStore,
+          provider: candidate.provider,
         });
+        const isAnyProfileAvailable = profileIds.some(
+          (id) => !authRuntime.isProfileInCooldown(authStore, id, undefined, candidate.model),
+        );
 
-        if (decision.type === "skip") {
-          attempts.push({
-            provider: candidate.provider,
-            model: candidate.model,
-            error: decision.error,
-            reason: decision.reason,
-          });
-          logModelFallbackDecision({
-            decision: "skip_candidate",
-            runId: params.runId,
-            requestedProvider: params.provider,
-            requestedModel: params.model,
+        if (profileIds.length > 0 && !isAnyProfileAvailable) {
+          // All profiles for this provider are in cooldown.
+          const now = Date.now();
+          const probeThrottleKey = resolveProbeThrottleKey(candidate.provider, params.agentDir);
+          const decision = resolveCooldownDecision({
             candidate,
-            attempt: i + 1,
-            total: candidates.length,
-            reason: decision.reason,
-            error: decision.error,
-            nextCandidate: candidates[i + 1],
             isPrimary,
-            requestedModelMatched: requestedModel,
-            fallbackConfigured: hasFallbackCandidates,
-            profileCount: profileIds.length,
+            requestedModel,
+            hasFallbackCandidates,
+            now,
+            probeThrottleKey,
+            authRuntime,
+            authStore,
+            profileIds,
           });
-          continue;
-        }
 
-        if (decision.markProbe) {
-          markProbeAttempt(now, probeThrottleKey);
-        }
-        if (shouldAllowCooldownProbeForReason(decision.reason)) {
-          // Probe at most once per provider per fallback run when all profiles
-          // are cooldowned. Re-probing every same-provider candidate can stall
-          // cross-provider fallback on providers with long internal retries.
-          const isTransientCooldownReason = shouldUseTransientCooldownProbeSlot(decision.reason);
-          if (isTransientCooldownReason && cooldownProbeUsedProviders.has(candidate.provider)) {
-            const error = `Provider ${candidate.provider} is in cooldown (probe already attempted this run)`;
+          if (decision.type === "skip") {
             attempts.push({
               provider: candidate.provider,
               model: candidate.model,
-              error,
+              error: decision.error,
               reason: decision.reason,
             });
             logModelFallbackDecision({
@@ -840,123 +966,219 @@ export async function runWithModelFallback<T>(params: {
               attempt: i + 1,
               total: candidates.length,
               reason: decision.reason,
-              error,
+              error: decision.error,
               nextCandidate: candidates[i + 1],
               isPrimary,
               requestedModelMatched: requestedModel,
               fallbackConfigured: hasFallbackCandidates,
               profileCount: profileIds.length,
             });
+            if (
+              shouldRetryModelAttempt({
+                policy: retryPolicy,
+                reason: decision.reason,
+                retriesUsed,
+              })
+            ) {
+              const activeRetryPolicy = retryPolicy;
+              if (!activeRetryPolicy) {
+                break candidateAttempt;
+              }
+              const soonestCooldown = authRuntime.getSoonestCooldownExpiry(authStore, profileIds, {
+                forModel: candidate.model,
+              });
+              const retryDelayMs = computeRetryDelayMs({
+                policy: activeRetryPolicy,
+                retryNumber: retriesUsed + 1,
+                nowMs: now,
+                cooldownUntilMs: soonestCooldown,
+              });
+              await params.onRetryScheduled?.({
+                provider: candidate.provider,
+                model: candidate.model,
+                reason: decision.reason,
+                source: "cooldown",
+                retryAttempt: retriesUsed + 1,
+                maxRetries: activeRetryPolicy.maxRetries,
+                waitMs: retryDelayMs,
+                candidateAttempt: i + 1,
+                totalCandidates: candidates.length,
+              });
+              retriesUsed += 1;
+              await sleepMs(retryDelayMs);
+              continue candidateAttempt;
+            }
+            break candidateAttempt;
+          }
+
+          if (decision.markProbe) {
+            markProbeAttempt(now, probeThrottleKey);
+          }
+          if (shouldAllowCooldownProbeForReason(decision.reason)) {
+            // Probe at most once per provider per fallback run when all profiles
+            // are cooldowned. Re-probing every same-provider candidate can stall
+            // cross-provider fallback on providers with long internal retries.
+            const isTransientCooldownReason = shouldUseTransientCooldownProbeSlot(decision.reason);
+            if (isTransientCooldownReason && cooldownProbeUsedProviders.has(candidate.provider)) {
+              const error = `Provider ${candidate.provider} is in cooldown (probe already attempted this run)`;
+              attempts.push({
+                provider: candidate.provider,
+                model: candidate.model,
+                error,
+                reason: decision.reason,
+              });
+              logModelFallbackDecision({
+                decision: "skip_candidate",
+                runId: params.runId,
+                requestedProvider: params.provider,
+                requestedModel: params.model,
+                candidate,
+                attempt: i + 1,
+                total: candidates.length,
+                reason: decision.reason,
+                error,
+                nextCandidate: candidates[i + 1],
+                isPrimary,
+                requestedModelMatched: requestedModel,
+                fallbackConfigured: hasFallbackCandidates,
+                profileCount: profileIds.length,
+              });
+              continue;
+            }
+            runOptions = { allowTransientCooldownProbe: true };
+            if (isTransientCooldownReason) {
+              transientProbeProviderForAttempt = candidate.provider;
+            }
+          }
+          attemptedDuringCooldown = true;
+          logModelFallbackDecision({
+            decision: "probe_cooldown_candidate",
+            runId: params.runId,
+            requestedProvider: params.provider,
+            requestedModel: params.model,
+            candidate,
+            attempt: i + 1,
+            total: candidates.length,
+            reason: decision.reason,
+            nextCandidate: candidates[i + 1],
+            isPrimary,
+            requestedModelMatched: requestedModel,
+            fallbackConfigured: hasFallbackCandidates,
+            allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
+            profileCount: profileIds.length,
+          });
+        }
+      }
+
+      const attemptRun = await runFallbackAttempt({
+        run: params.run,
+        ...candidate,
+        attempts,
+        options: runOptions,
+        classifyResult: params.classifyResult,
+        attempt: i + 1,
+        total: candidates.length,
+      });
+      if ("success" in attemptRun) {
+        if (i > 0 || attempts.length > 0 || attemptedDuringCooldown || retriesUsed > 0) {
+          logModelFallbackDecision({
+            decision: "candidate_succeeded",
+            runId: params.runId,
+            requestedProvider: params.provider,
+            requestedModel: params.model,
+            candidate,
+            attempt: i + 1,
+            total: candidates.length,
+            previousAttempts: attempts,
+            isPrimary,
+            requestedModelMatched: requestedModel,
+            fallbackConfigured: hasFallbackCandidates,
+          });
+        }
+        const notFoundAttempt =
+          i > 0 ? attempts.find((a) => a.reason === "model_not_found") : undefined;
+        if (notFoundAttempt) {
+          log.warn(
+            `Model "${sanitizeForLog(notFoundAttempt.provider)}/${sanitizeForLog(notFoundAttempt.model)}" not found. Fell back to "${sanitizeForLog(candidate.provider)}/${sanitizeForLog(candidate.model)}".`,
+          );
+        }
+        return attemptRun.success;
+      }
+      const err = attemptRun.error;
+      {
+        if (transientProbeProviderForAttempt) {
+          const probeFailureReason = describeFailoverError(err).reason;
+          if (!shouldPreserveTransientCooldownProbeSlot(probeFailureReason)) {
+            cooldownProbeUsedProviders.add(transientProbeProviderForAttempt);
+          }
+        }
+        // Context overflow errors should be handled by the inner runner's
+        // compaction/retry logic, not by model fallback.  If one escapes as a
+        // throw, rethrow it immediately rather than trying a different model
+        // that may have a smaller context window and fail worse.
+        const errMessage = formatErrorMessage(err);
+        if (isLikelyContextOverflowError(errMessage)) {
+          throw err;
+        }
+        const normalized =
+          coerceToFailoverError(err, {
+            provider: candidate.provider,
+            model: candidate.model,
+          }) ?? err;
+
+        // LiveSessionModelSwitchError during fallback means the session's
+        // persisted model conflicts with this fallback candidate.  Treat it
+        // as a known failover so the chain continues to the next candidate
+        // instead of re-throwing and triggering infinite retry loops in the
+        // outer runner.  (#58466)
+        if (err instanceof LiveSessionModelSwitchError) {
+          const liveSwitchTargetIndex = findLaterLiveSessionModelSwitchCandidateIndex({
+            error: err,
+            candidates,
+            currentIndex: i,
+          });
+          if (liveSwitchTargetIndex !== null) {
+            i = liveSwitchTargetIndex - 1;
             continue;
           }
-          runOptions = { allowTransientCooldownProbe: true };
-          if (isTransientCooldownReason) {
-            transientProbeProviderForAttempt = candidate.provider;
-          }
-        }
-        attemptedDuringCooldown = true;
-        logModelFallbackDecision({
-          decision: "probe_cooldown_candidate",
-          runId: params.runId,
-          requestedProvider: params.provider,
-          requestedModel: params.model,
-          candidate,
-          attempt: i + 1,
-          total: candidates.length,
-          reason: decision.reason,
-          nextCandidate: candidates[i + 1],
-          isPrimary,
-          requestedModelMatched: requestedModel,
-          fallbackConfigured: hasFallbackCandidates,
-          allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
-          profileCount: profileIds.length,
-        });
-      }
-    }
 
-    const attemptRun = await runFallbackAttempt({
-      run: params.run,
-      ...candidate,
-      attempts,
-      options: runOptions,
-      classifyResult: params.classifyResult,
-      attempt: i + 1,
-      total: candidates.length,
-    });
-    if ("success" in attemptRun) {
-      if (i > 0 || attempts.length > 0 || attemptedDuringCooldown) {
-        logModelFallbackDecision({
-          decision: "candidate_succeeded",
-          runId: params.runId,
-          requestedProvider: params.provider,
-          requestedModel: params.model,
-          candidate,
-          attempt: i + 1,
-          total: candidates.length,
-          previousAttempts: attempts,
-          isPrimary,
-          requestedModelMatched: requestedModel,
-          fallbackConfigured: hasFallbackCandidates,
-        });
-      }
-      const notFoundAttempt =
-        i > 0 ? attempts.find((a) => a.reason === "model_not_found") : undefined;
-      if (notFoundAttempt) {
-        log.warn(
-          `Model "${sanitizeForLog(notFoundAttempt.provider)}/${sanitizeForLog(notFoundAttempt.model)}" not found. Fell back to "${sanitizeForLog(candidate.provider)}/${sanitizeForLog(candidate.model)}".`,
-        );
-      }
-      return attemptRun.success;
-    }
-    const err = attemptRun.error;
-    {
-      if (transientProbeProviderForAttempt) {
-        const probeFailureReason = describeFailoverError(err).reason;
-        if (!shouldPreserveTransientCooldownProbeSlot(probeFailureReason)) {
-          cooldownProbeUsedProviders.add(transientProbeProviderForAttempt);
-        }
-      }
-      // Context overflow errors should be handled by the inner runner's
-      // compaction/retry logic, not by model fallback.  If one escapes as a
-      // throw, rethrow it immediately rather than trying a different model
-      // that may have a smaller context window and fail worse.
-      const errMessage = formatErrorMessage(err);
-      if (isLikelyContextOverflowError(errMessage)) {
-        throw err;
-      }
-      const normalized =
-        coerceToFailoverError(err, {
-          provider: candidate.provider,
-          model: candidate.model,
-        }) ?? err;
-
-      // LiveSessionModelSwitchError during fallback means the session's
-      // persisted model conflicts with this fallback candidate.  Treat it
-      // as a known failover so the chain continues to the next candidate
-      // instead of re-throwing and triggering infinite retry loops in the
-      // outer runner.  (#58466)
-      if (err instanceof LiveSessionModelSwitchError) {
-        const liveSwitchTargetIndex = findLaterLiveSessionModelSwitchCandidateIndex({
-          error: err,
-          candidates,
-          currentIndex: i,
-        });
-        if (liveSwitchTargetIndex !== null) {
-          i = liveSwitchTargetIndex - 1;
+          const switchMsg = err.message;
+          const switchNormalized = new FailoverError(switchMsg, {
+            reason: "overloaded",
+            provider: candidate.provider,
+            model: candidate.model,
+          });
+          lastError = switchNormalized;
+          recordFailedCandidateAttempt({
+            attempts,
+            candidate,
+            error: switchNormalized,
+            runId: params.runId,
+            requestedProvider: params.provider,
+            requestedModel: params.model,
+            attempt: i + 1,
+            total: candidates.length,
+            nextCandidate: candidates[i + 1],
+            isPrimary,
+            requestedModelMatched: requestedModel,
+            fallbackConfigured: hasFallbackCandidates,
+          });
           continue;
         }
 
-        const switchMsg = err.message;
-        const switchNormalized = new FailoverError(switchMsg, {
-          reason: "overloaded",
-          provider: candidate.provider,
-          model: candidate.model,
-        });
-        lastError = switchNormalized;
+        // Even unrecognized errors should not abort the fallback loop when
+        // there are remaining candidates.  Only abort/context-overflow errors
+        // (handled above) are truly non-retryable.
+        const isKnownFailover = isFailoverError(normalized);
+        if (!isKnownFailover && i === candidates.length - 1) {
+          throw err;
+        }
+
+        lastError = isKnownFailover ? normalized : err;
         recordFailedCandidateAttempt({
           attempts,
           candidate,
-          error: switchNormalized,
+          error: normalized,
           runId: params.runId,
           requestedProvider: params.provider,
           requestedModel: params.model,
@@ -967,39 +1189,47 @@ export async function runWithModelFallback<T>(params: {
           requestedModelMatched: requestedModel,
           fallbackConfigured: hasFallbackCandidates,
         });
-        continue;
+        await params.onError?.({
+          provider: candidate.provider,
+          model: candidate.model,
+          error: isKnownFailover ? normalized : err,
+          attempt: i + 1,
+          total: candidates.length,
+        });
+        const described = describeFailoverError(normalized);
+        if (
+          shouldRetryModelAttempt({
+            policy: retryPolicy,
+            reason: described.reason,
+            retriesUsed,
+          })
+        ) {
+          const activeRetryPolicy = retryPolicy;
+          if (!activeRetryPolicy) {
+            break;
+          }
+          const retryDelayMs = computeRetryDelayMs({
+            policy: activeRetryPolicy,
+            retryNumber: retriesUsed + 1,
+            nowMs: Date.now(),
+          });
+          await params.onRetryScheduled?.({
+            provider: candidate.provider,
+            model: candidate.model,
+            reason: described.reason ?? "unknown",
+            source: "error",
+            retryAttempt: retriesUsed + 1,
+            maxRetries: activeRetryPolicy.maxRetries,
+            waitMs: retryDelayMs,
+            candidateAttempt: i + 1,
+            totalCandidates: candidates.length,
+          });
+          retriesUsed += 1;
+          await sleepMs(retryDelayMs);
+          continue candidateAttempt;
+        }
       }
-
-      // Even unrecognized errors should not abort the fallback loop when
-      // there are remaining candidates.  Only abort/context-overflow errors
-      // (handled above) are truly non-retryable.
-      const isKnownFailover = isFailoverError(normalized);
-      if (!isKnownFailover && i === candidates.length - 1) {
-        throw err;
-      }
-
-      lastError = isKnownFailover ? normalized : err;
-      recordFailedCandidateAttempt({
-        attempts,
-        candidate,
-        error: normalized,
-        runId: params.runId,
-        requestedProvider: params.provider,
-        requestedModel: params.model,
-        attempt: i + 1,
-        total: candidates.length,
-        nextCandidate: candidates[i + 1],
-        isPrimary,
-        requestedModelMatched: requestedModel,
-        fallbackConfigured: hasFallbackCandidates,
-      });
-      await params.onError?.({
-        provider: candidate.provider,
-        model: candidate.model,
-        error: isKnownFailover ? normalized : err,
-        attempt: i + 1,
-        total: candidates.length,
-      });
+      break;
     }
   }
 
