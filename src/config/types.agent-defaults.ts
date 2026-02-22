@@ -14,11 +14,26 @@ export type AgentModelEntryConfig = {
   params?: Record<string, unknown>;
   /** Enable streaming for this model (default: true, false for Ollama to avoid SDK issue #1205). */
   streaming?: boolean;
+  /** Optional per-model retry policy before model fallback is attempted. */
+  retry?: AgentModelRetryConfig;
 };
 
 export type AgentModelListConfig = {
   primary?: string;
   fallbacks?: string[];
+};
+
+export type AgentModelRetryConfig = {
+  /** Number of retries before falling back to the next model. */
+  maxRetries?: number;
+  /** Initial cooldown/backoff before the first retry (seconds). */
+  initialBackoffSeconds?: number;
+  /** Exponential multiplier applied between retries (default: 2). */
+  backoffFactor?: number;
+  /** Maximum backoff between retries (seconds). */
+  maxBackoffSeconds?: number;
+  /** Failover reasons eligible for retries (default: ["rate_limit"]). */
+  reasons?: Array<"auth" | "format" | "rate_limit" | "billing" | "timeout" | "unknown">;
 };
 
 export type AgentContextPruningConfig = {

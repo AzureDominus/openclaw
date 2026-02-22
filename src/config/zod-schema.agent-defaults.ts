@@ -27,6 +27,27 @@ export const AgentDefaultsSchema = z
             params: z.record(z.string(), z.unknown()).optional(),
             /** Enable streaming for this model (default: true, false for Ollama to avoid SDK issue #1205). */
             streaming: z.boolean().optional(),
+            retry: z
+              .object({
+                maxRetries: z.number().int().nonnegative().optional(),
+                initialBackoffSeconds: z.number().positive().optional(),
+                backoffFactor: z.number().positive().optional(),
+                maxBackoffSeconds: z.number().positive().optional(),
+                reasons: z
+                  .array(
+                    z.union([
+                      z.literal("auth"),
+                      z.literal("format"),
+                      z.literal("rate_limit"),
+                      z.literal("billing"),
+                      z.literal("timeout"),
+                      z.literal("unknown"),
+                    ]),
+                  )
+                  .optional(),
+              })
+              .strict()
+              .optional(),
           })
           .strict(),
       )

@@ -1,13 +1,11 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
-import type { TemplateContext } from "../templating.js";
-import type { VerboseLevel } from "../thinking.js";
-import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import type { FollowupRun } from "./queue.js";
-import type { TypingSignaler } from "./typing-mode.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionId } from "../../agents/cli-session.js";
-import { runWithModelFallback } from "../../agents/model-fallback.js";
+import {
+  runWithModelFallback,
+  type ModelRetryScheduledEvent,
+} from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import {
   isCompactionFailureError,
@@ -25,6 +23,7 @@ import {
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
+import { formatDurationCompact } from "../../infra/format-time/format-duration.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   isInternalMessageChannel,
@@ -32,14 +31,19 @@ import {
   resolveMessageChannel,
 } from "../../utils/message-channel.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
+import type { TemplateContext } from "../templating.js";
+import type { VerboseLevel } from "../thinking.js";
 import { isSilentReplyPrefixText, isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
+import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
   buildEmbeddedRunBaseParams,
   buildEmbeddedRunContexts,
   resolveModelFallbackOptions,
 } from "./agent-runner-utils.js";
 import { type BlockReplyPipeline } from "./block-reply-pipeline.js";
+import type { FollowupRun } from "./queue.js";
 import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
+import type { TypingSignaler } from "./typing-mode.js";
 
 export type RuntimeFallbackAttempt = {
   provider: string;
@@ -176,8 +180,29 @@ export async function runAgentTurnWithFallback(params: {
       };
       const blockReplyPipeline = params.blockReplyPipeline;
       const onToolResult = params.opts?.onToolResult;
+      const sendRetryNotice = async (event: ModelRetryScheduledEvent): Promise<void> => {
+        if (params.isHeartbeat) {
+          return;
+        }
+        const waitLabel =
+          formatDurationCompact(event.waitMs, { spaced: true }) ??
+          `${Math.max(1, Math.round(event.waitMs / 1000))}s`;
+        const base = `${event.provider}/${event.model}`;
+        const text =
+          event.reason === "rate_limit"
+            ? `⚠️ ${base} hit a rate limit and is on cooldown${
+                event.source === "cooldown" ? " (all auth profiles cooling down)" : ""
+              }. Retry ${event.retryAttempt}/${event.maxRetries} in ${waitLabel} before fallback.`
+            : `⚠️ ${base} failed (${event.reason}). Retry ${event.retryAttempt}/${event.maxRetries} in ${waitLabel} before fallback.`;
+        if (params.opts?.onBlockReply) {
+          await params.opts.onBlockReply({ text });
+          return;
+        }
+        await params.opts?.onToolResult?.({ text });
+      };
       const fallbackResult = await runWithModelFallback({
         ...resolveModelFallbackOptions(params.followupRun.run),
+        onRetryScheduled: sendRetryNotice,
         run: (provider, model) => {
           // Notify that model selection is complete (including after fallback).
           // This allows responsePrefix template interpolation with the actual model.

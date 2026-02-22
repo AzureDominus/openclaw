@@ -306,6 +306,111 @@ describe("runWithModelFallback", () => {
     ]);
   });
 
+  it("retries the same model on rate limits before fallback when configured", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+            fallbacks: ["anthropic/claude-haiku-3-5"],
+          },
+          models: {
+            "openai/gpt-4.1-mini": {
+              retry: {
+                maxRetries: 2,
+                initialBackoffSeconds: 0.001,
+                backoffFactor: 1,
+                maxBackoffSeconds: 0.001,
+              },
+            },
+            "anthropic/claude-haiku-3-5": {},
+          },
+        },
+      },
+    });
+
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error("rate limited"), { status: 429 }))
+      .mockResolvedValueOnce("ok");
+    const onRetryScheduled = vi.fn();
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+      onRetryScheduled,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run.mock.calls).toEqual([
+      ["openai", "gpt-4.1-mini"],
+      ["openai", "gpt-4.1-mini"],
+    ]);
+    expect(onRetryScheduled).toHaveBeenCalledTimes(1);
+    expect(onRetryScheduled.mock.calls[0]?.[0]).toMatchObject({
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      reason: "rate_limit",
+      source: "error",
+      retryAttempt: 1,
+      maxRetries: 2,
+      candidateAttempt: 1,
+      totalCandidates: 2,
+    });
+    const firstRetryEvent = onRetryScheduled.mock.calls[0]?.[0] as { waitMs?: number } | undefined;
+    expect(firstRetryEvent?.waitMs ?? 0).toBeGreaterThan(0);
+  });
+
+  it("falls back after exhausting configured model retries", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+            fallbacks: ["anthropic/claude-haiku-3-5"],
+          },
+          models: {
+            "openai/gpt-4.1-mini": {
+              retry: {
+                maxRetries: 1,
+                initialBackoffSeconds: 0.001,
+                backoffFactor: 1,
+                maxBackoffSeconds: 0.001,
+              },
+            },
+            "anthropic/claude-haiku-3-5": {},
+          },
+        },
+      },
+    });
+
+    const run = vi.fn().mockImplementation(async (provider) => {
+      if (provider === "openai") {
+        throw Object.assign(new Error("rate limited"), { status: 429 });
+      }
+      if (provider === "anthropic") {
+        return "ok";
+      }
+      throw new Error(`unexpected provider: ${provider}`);
+    });
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run.mock.calls).toEqual([
+      ["openai", "gpt-4.1-mini"],
+      ["openai", "gpt-4.1-mini"],
+      ["anthropic", "claude-haiku-3-5"],
+    ]);
+  });
+
   it("falls back on transient HTTP 5xx errors", async () => {
     await expectFallsBackToHaiku({
       provider: "openai",
@@ -408,6 +513,79 @@ describe("runWithModelFallback", () => {
         cooldownUntil: Date.now() + 5 * 60_000,
       },
       expectedReason: "rate_limit",
+    });
+  });
+
+  it("retries cooldown-skipped models before falling back when configured", async () => {
+    const provider = `cooldown-retry-${crypto.randomUUID()}`;
+    const profileId = `${provider}:default`;
+
+    const store: AuthProfileStore = {
+      version: AUTH_STORE_VERSION,
+      profiles: {
+        [profileId]: {
+          type: "api_key",
+          provider,
+          key: "test-key",
+        },
+      },
+      usageStats: {
+        [profileId]: {
+          cooldownUntil: Date.now() + 110,
+        },
+      },
+    };
+
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: `${provider}/m1`,
+            fallbacks: ["fallback/ok-model"],
+          },
+          models: {
+            [`${provider}/m1`]: {
+              retry: {
+                maxRetries: 1,
+                initialBackoffSeconds: 0.12,
+                backoffFactor: 1,
+                maxBackoffSeconds: 0.12,
+                reasons: ["rate_limit"],
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const run = vi.fn().mockImplementation(async (providerId, modelId) => {
+      if (providerId === provider && modelId === "m1") {
+        return "ok";
+      }
+      throw new Error(`unexpected provider: ${providerId}/${modelId}`);
+    });
+    const onRetryScheduled = vi.fn();
+
+    const result = await runWithStoredAuth({
+      cfg,
+      store,
+      provider,
+      run,
+      onRetryScheduled,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run.mock.calls).toEqual([[provider, "m1"]]);
+    expect(onRetryScheduled).toHaveBeenCalledTimes(1);
+    expect(onRetryScheduled.mock.calls[0]?.[0]).toMatchObject({
+      provider,
+      model: "m1",
+      reason: "rate_limit",
+      source: "cooldown",
+      retryAttempt: 1,
+      maxRetries: 1,
+      candidateAttempt: 1,
+      totalCandidates: 1,
     });
   });
 

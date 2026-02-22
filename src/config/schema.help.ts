@@ -880,6 +880,18 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.model.primary": "Primary model (provider/model).",
   "agents.defaults.model.fallbacks":
     "Ordered fallback models (provider/model). Used when the primary model fails.",
+  "agents.defaults.models.*.retry":
+    "Per-model retry policy applied before moving to the next fallback model.",
+  "agents.defaults.models.*.retry.maxRetries":
+    "Retry count before fallback (0 disables retries for that model).",
+  "agents.defaults.models.*.retry.initialBackoffSeconds":
+    "Initial retry cooldown in seconds (default: 60).",
+  "agents.defaults.models.*.retry.backoffFactor":
+    "Exponential multiplier between retries (default: 2).",
+  "agents.defaults.models.*.retry.maxBackoffSeconds":
+    "Maximum retry backoff in seconds (default: 600).",
+  "agents.defaults.models.*.retry.reasons":
+    'Failover reasons that should retry this model (default: ["rate_limit"]).',
   "agents.defaults.imageModel.primary":
     "Optional image model (provider/model) used when the primary model lacks image input.",
   "agents.defaults.imageModel.fallbacks": "Ordered fallback image models (provider/model).",
