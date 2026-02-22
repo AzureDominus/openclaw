@@ -1,4 +1,11 @@
 import type { Bot } from "grammy";
+import type { ReplyPayload } from "../auto-reply/types.js";
+import type { OpenClawConfig, ReplyToMode, TelegramAccountConfig } from "../config/types.js";
+import type { RuntimeEnv } from "../runtime.js";
+import type { TelegramMessageContext } from "./bot-message-context.js";
+import type { TelegramBotOptions } from "./bot.js";
+import type { TelegramStreamMode } from "./bot/types.js";
+import type { TelegramInlineButtons } from "./button-types.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import {
   findModelInCatalog,
@@ -10,22 +17,15 @@ import { stripDeclaredStopReasonLine } from "../agents/stop-reason.js";
 import { resolveChunkMode } from "../auto-reply/chunk.js";
 import { clearHistoryEntriesIfEnabled } from "../auto-reply/reply/history.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
-import type { ReplyPayload } from "../auto-reply/types.js";
 import { removeAckReactionAfterReply } from "../channels/ack-reactions.js";
 import { logAckFailure, logTypingFailure } from "../channels/logging.js";
 import { createReplyPrefixOptions } from "../channels/reply-prefix.js";
 import { createTypingCallbacks } from "../channels/typing.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
-import type { OpenClawConfig, ReplyToMode, TelegramAccountConfig } from "../config/types.js";
 import { danger, logVerbose } from "../globals.js";
 import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
-import type { RuntimeEnv } from "../runtime.js";
-import type { TelegramMessageContext } from "./bot-message-context.js";
-import type { TelegramBotOptions } from "./bot.js";
 import { deliverReplies } from "./bot/delivery.js";
-import type { TelegramStreamMode } from "./bot/types.js";
-import type { TelegramInlineButtons } from "./button-types.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
 import { renderTelegramHtmlText } from "./format.js";
 import {
@@ -321,20 +321,39 @@ export const dispatchTelegramMessage = async ({
     }
     await lane.stream.flush();
   };
+  const splitPartialAnswerSegment = async () => {
+    if (streamMode !== "partial" || !answerLane.stream) {
+      return;
+    }
+    const currentSegment = normalizeDraftTextForDedup(answerLane.lastPartialText);
+    if (!currentSegment) {
+      resetDraftLaneState(answerLane, "answer");
+      return;
+    }
+    await flushDraftLane(answerLane);
+    rememberStreamedPartialSegment({
+      text: answerLane.lastPartialText,
+      segmentId: currentPartialSegmentIdByLane.answer,
+    });
+    answerLane.stream.forceNewMessage();
+    resetDraftLaneState(answerLane, "answer");
+  };
 
   // Keep block/progress updates enabled when stream mode is off.
   // `streamMode: off` should disable preview editing, not suppress
   // user-facing progress checkpoints between tool bursts.
   const disableBlockStreaming =
     streamMode === "off"
-      ? false
+      ? typeof telegramCfg.blockStreaming === "boolean"
+        ? telegramCfg.blockStreaming
+        : true
       : forceBlockStreamingForReasoning
         ? false
-      : typeof telegramCfg.blockStreaming === "boolean"
-        ? !telegramCfg.blockStreaming
-        : canStreamAnswerDraft
-          ? true
-          : undefined;
+        : typeof telegramCfg.blockStreaming === "boolean"
+          ? !telegramCfg.blockStreaming
+          : canStreamAnswerDraft
+            ? true
+            : undefined;
 
   const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
     cfg,
@@ -473,6 +492,7 @@ export const dispatchTelegramMessage = async ({
     }
     const currentPreviewText = previewTextSnapshot ?? getLanePreviewText(lane);
     const shouldSkipRegressive =
+      context !== "final" &&
       Boolean(currentPreviewText) &&
       isLikelyRegressiveFinalEdit({
         currentPreviewText,
@@ -798,11 +818,17 @@ export const dispatchTelegramMessage = async ({
               splitReasoningOnNextStream = reasoningLane.hasStreamedMessage;
             }
           : undefined,
-        onToolStart: statusReactionController
-          ? async (payload) => {
-              await statusReactionController.setTool(payload.name);
-            }
-          : undefined,
+        onToolStart:
+          streamMode === "partial" || statusReactionController
+            ? async (payload) => {
+                if (payload.phase === "start") {
+                  await splitPartialAnswerSegment();
+                }
+                if (statusReactionController) {
+                  await statusReactionController.setTool(payload.name);
+                }
+              }
+            : undefined,
         onModelSelected,
       },
     }));
