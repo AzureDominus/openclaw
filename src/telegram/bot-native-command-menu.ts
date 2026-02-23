@@ -17,6 +17,12 @@ import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 
 export const TELEGRAM_MAX_COMMANDS = 100;
 const TELEGRAM_COMMAND_RETRY_RATIO = 0.8;
+const TELEGRAM_MENU_SYNC_RETRY_DEFAULTS: RetryConfig = {
+  attempts: 8,
+  minDelayMs: 1_000,
+  maxDelayMs: 60_000,
+  jitter: 0.15,
+};
 
 export type TelegramMenuCommand = {
   command: string;
@@ -170,9 +176,13 @@ export function syncTelegramMenuCommands(params: {
   const { bot, runtime, commandsToRegister, accountId, botIdentity, retry, configRetry, verbose } =
     params;
   const sync = async () => {
+    const retryOverrides: RetryConfig = {
+      ...configRetry,
+      ...retry,
+    };
     const request = createTelegramRetryRunner({
-      retry,
-      configRetry,
+      configRetry: TELEGRAM_MENU_SYNC_RETRY_DEFAULTS,
+      retry: retryOverrides,
       verbose,
       shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "unknown" }),
     });
