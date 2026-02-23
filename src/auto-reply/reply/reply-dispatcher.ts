@@ -2,6 +2,8 @@ import type { TypingCallbacks } from "../../channels/typing.js";
 import type { HumanDelayConfig } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { extractErrorCode, formatErrorMessage } from "../../infra/errors.js";
+import { ackDelivery, enqueueDelivery, failDelivery } from "../../infra/outbound/delivery-queue.js";
+import type { OutboundChannel } from "../../infra/outbound/targets.js";
 import { type RetryConfig, resolveRetryConfig, retryAsync } from "../../infra/retry.js";
 import { sleep } from "../../utils.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -23,6 +25,18 @@ type ReplyDispatchDeliverer = (
   payload: ReplyPayload,
   info: { kind: ReplyDispatchKind },
 ) => Promise<void>;
+
+type DurableReplyRoute = {
+  channel: Exclude<OutboundChannel, "none">;
+  to: string;
+  accountId?: string;
+  threadId?: string | number | null;
+  replyToId?: string | null;
+  bestEffort?: boolean;
+  gifPlayback?: boolean;
+  silent?: boolean;
+  stateDir?: string;
+};
 
 const DEFAULT_HUMAN_DELAY_MIN_MS = 800;
 const DEFAULT_HUMAN_DELAY_MAX_MS = 2500;
@@ -89,6 +103,8 @@ export type ReplyDispatcherOptions = {
   humanDelay?: HumanDelayConfig;
   /** Retry policy for transient block-delivery failures in shared dispatch. */
   blockRetry?: RetryConfig;
+  /** Optional write-ahead queue route used for crash-safe reply delivery replay. */
+  durableRoute?: DurableReplyRoute;
   /** Strip OPENCLAW_STOP_REASON marker lines before delivery. */
   stripStopReasonMarker?: boolean;
   /** Strip leaked plain-text tool-call drafts before delivery. */
@@ -178,7 +194,10 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
       onHeartbeatStrip: options.onHeartbeatStrip,
       stripStopReasonMarker: options.stripStopReasonMarker,
       stripFailedToolCallDraft: options.stripFailedToolCallDraft,
-      onSkip: (reason) => options.onSkip?.(payload, { kind, reason }),
+      onSkip: (reason) => {
+        logVerbose(`reply-delivery status=skipped kind=${kind} reason=${reason}`);
+        options.onSkip?.(payload, { kind, reason });
+      },
     });
     if (!normalized) {
       return false;
@@ -201,25 +220,66 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
             await sleep(delayMs);
           }
         }
-        // Safe: deliver is called inside an async .then() callback, so even a synchronous
-        // throw becomes a rejection that flows through .catch()/.finally(), ensuring cleanup.
-        if (kind === "block") {
+        const queueId = options.durableRoute
+          ? await enqueueDelivery(
+              {
+                channel: options.durableRoute.channel,
+                to: options.durableRoute.to,
+                accountId: options.durableRoute.accountId,
+                payloads: [normalized],
+                threadId: options.durableRoute.threadId,
+                replyToId: normalized.replyToId ?? options.durableRoute.replyToId ?? null,
+                bestEffort: options.durableRoute.bestEffort,
+                gifPlayback: options.durableRoute.gifPlayback,
+                silent: options.durableRoute.silent,
+              },
+              options.durableRoute.stateDir,
+            ).catch((err) => {
+              logVerbose(
+                `reply-delivery queue enqueue failed kind=${kind}: ${formatErrorMessage(err)}`,
+              );
+              return null;
+            })
+          : null;
+        try {
+          // Safe: deliver is called inside an async .then() callback, so even a synchronous
+          // throw becomes a rejection that flows through .catch()/.finally(), ensuring cleanup.
           await retryAsync(() => options.deliver(normalized, { kind }), {
             ...blockRetryConfig,
-            label: "block reply delivery",
+            label: `${kind} reply delivery`,
             shouldRetry: (err) => shouldRetryBlockDelivery(err),
             onRetry: (info) => {
               const maxRetries = Math.max(1, info.maxAttempts - 1);
               logVerbose(
-                `block reply delivery retry ${info.attempt}/${maxRetries} in ${info.delayMs}ms: ${formatErrorMessage(info.err)}`,
+                `${kind} reply delivery retry ${info.attempt}/${maxRetries} in ${info.delayMs}ms: ${formatErrorMessage(info.err)}`,
               );
             },
           });
-        } else {
-          await options.deliver(normalized, { kind });
+          if (queueId) {
+            await ackDelivery(queueId, options.durableRoute?.stateDir).catch((err) => {
+              logVerbose(
+                `reply-delivery queue ack failed kind=${kind} id=${queueId}: ${formatErrorMessage(err)}`,
+              );
+            });
+          }
+          logVerbose(`reply-delivery status=sent kind=${kind}`);
+        } catch (err) {
+          if (queueId) {
+            await failDelivery(
+              queueId,
+              err instanceof Error ? err.message : String(err),
+              options.durableRoute?.stateDir,
+            ).catch((queueErr) => {
+              logVerbose(
+                `reply-delivery queue fail-update failed kind=${kind} id=${queueId}: ${formatErrorMessage(queueErr)}`,
+              );
+            });
+          }
+          throw err;
         }
       })
       .catch((err) => {
+        logVerbose(`reply-delivery status=failed kind=${kind} error=${formatErrorMessage(err)}`);
         options.onError?.(err, { kind });
       })
       .finally(() => {

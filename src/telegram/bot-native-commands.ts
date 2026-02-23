@@ -630,6 +630,13 @@ export const registerTelegramNativeCommands = ({
             cfg,
             dispatcherOptions: {
               ...prefixOptions,
+              stripStopReasonMarker: true,
+              durableRoute: {
+                channel: "telegram",
+                to: String(chatId),
+                accountId: route.accountId,
+                threadId: threadSpec.id ?? null,
+              },
               deliver: async (payload, _info) => {
                 const result = await deliverReplies({
                   replies: [payload],

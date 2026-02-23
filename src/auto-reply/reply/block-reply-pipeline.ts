@@ -121,21 +121,29 @@ export function createBlockReplyPipeline(params: {
   const bufferedPayloads: ReplyPayload[] = [];
   let sendChain: Promise<void> = Promise.resolve();
   let aborted = false;
+  let deliveryFailed = false;
   let didStream = false;
   let didLogTimeout = false;
 
+  const logDelivery = (status: "sent" | "failed" | "skipped", detail: string) => {
+    logVerbose(`block-reply-delivery status=${status} ${detail}`);
+  };
+
   const sendPayload = (payload: ReplyPayload, skipSeen?: boolean) => {
     if (aborted) {
+      logDelivery("skipped", "reason=aborted");
       return;
     }
     const payloadKey = createBlockReplyPayloadKey(payload);
     if (!skipSeen) {
       if (seenKeys.has(payloadKey)) {
+        logDelivery("skipped", "reason=duplicate-seen");
         return;
       }
       seenKeys.add(payloadKey);
     }
     if (sentKeys.has(payloadKey) || pendingKeys.has(payloadKey)) {
+      logDelivery("skipped", "reason=duplicate-pending");
       return;
     }
     pendingKeys.add(payloadKey);
@@ -177,19 +185,23 @@ export function createBlockReplyPipeline(params: {
         }
         sentKeys.add(payloadKey);
         didStream = true;
+        logDelivery("sent", "kind=block");
       })
       .catch((err) => {
         if (err === timeoutError) {
           abortController.abort();
-          aborted = true;
+          deliveryFailed = true;
           if (!didLogTimeout) {
             didLogTimeout = true;
             logVerbose(
-              `block reply delivery timed out after ${timeoutMs}ms; skipping remaining block replies to preserve ordering`,
+              `block reply delivery timed out after ${timeoutMs}ms; allowing subsequent block replies`,
             );
           }
+          logDelivery("failed", `reason=timeout timeoutMs=${timeoutMs}`);
           return;
         }
+        deliveryFailed = true;
+        logDelivery("failed", `reason=error error=${formatErrorMessage(err)}`);
         logVerbose(`block reply delivery failed: ${formatErrorMessage(err)}`);
       })
       .finally(() => {
@@ -220,6 +232,7 @@ export function createBlockReplyPipeline(params: {
       pendingKeys.has(payloadKey) ||
       bufferedPayloadKeys.has(payloadKey)
     ) {
+      logDelivery("skipped", "reason=duplicate-buffer");
       return true;
     }
     seenKeys.add(payloadKey);
@@ -256,6 +269,7 @@ export function createBlockReplyPipeline(params: {
     if (coalescer) {
       const payloadKey = createBlockReplyPayloadKey(payload);
       if (seenKeys.has(payloadKey) || pendingKeys.has(payloadKey) || bufferedKeys.has(payloadKey)) {
+        logDelivery("skipped", "reason=duplicate-coalesced");
         return;
       }
       bufferedKeys.add(payloadKey);
@@ -281,7 +295,7 @@ export function createBlockReplyPipeline(params: {
     stop,
     hasBuffered: () => Boolean(coalescer?.hasBuffered() || bufferedPayloads.length > 0),
     didStream: () => didStream,
-    isAborted: () => aborted,
+    isAborted: () => aborted || deliveryFailed,
     hasSentPayload: (payload) => {
       const payloadKey = createBlockReplyPayloadKey(payload);
       return sentKeys.has(payloadKey);

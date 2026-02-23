@@ -46,6 +46,8 @@ type QueuedDeliveryPayload = {
 export interface QueuedDelivery extends QueuedDeliveryPayload {
   id: string;
   enqueuedAt: number;
+  /** Absolute timestamp when this entry is eligible for retry. */
+  nextAttemptAt?: number;
   retryCount: number;
   lastError?: string;
 }
@@ -79,6 +81,7 @@ export async function enqueueDelivery(
   const entry: QueuedDelivery = {
     id,
     enqueuedAt: Date.now(),
+    nextAttemptAt: Date.now(),
     channel: params.channel,
     to: params.to,
     accountId: params.accountId,
@@ -123,6 +126,7 @@ export async function failDelivery(id: string, error: string, stateDir?: string)
   const entry: QueuedDelivery = JSON.parse(raw);
   entry.retryCount += 1;
   entry.lastError = error;
+  entry.nextAttemptAt = Date.now() + computeBackoffMs(entry.retryCount);
   const tmp = `${filePath}.${process.pid}.tmp`;
   await fs.promises.writeFile(tmp, JSON.stringify(entry, null, 2), {
     encoding: "utf-8",
@@ -250,17 +254,23 @@ export async function recoverPendingDeliveries(opts: {
       continue;
     }
 
-    const backoff = computeBackoffMs(entry.retryCount + 1);
-    if (backoff > 0) {
-      if (now + backoff >= deadline) {
+    // Use persisted absolute schedule when available so restart recovery does not
+    // keep deferring the same entry forever under short recovery budgets.
+    const dueAt =
+      typeof entry.nextAttemptAt === "number" && Number.isFinite(entry.nextAttemptAt)
+        ? entry.nextAttemptAt
+        : now;
+    const waitMs = Math.max(0, Math.trunc(dueAt - now));
+    if (waitMs > 0) {
+      if (now + waitMs >= deadline) {
         const deferred = pending.length - recovered - failed - skipped;
         opts.log.warn(
           `Recovery time budget exceeded — ${deferred} entries deferred to next restart`,
         );
         break;
       }
-      opts.log.info(`Waiting ${backoff}ms before retrying delivery ${entry.id}`);
-      await delayFn(backoff);
+      opts.log.info(`Waiting ${waitMs}ms before retrying delivery ${entry.id}`);
+      await delayFn(waitMs);
     }
 
     try {

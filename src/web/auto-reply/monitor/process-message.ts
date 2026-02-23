@@ -363,6 +363,12 @@ export async function processMessage(params: {
     replyResolver: params.replyResolver,
     dispatcherOptions: {
       ...prefixOptions,
+      stripStopReasonMarker: true,
+      durableRoute: {
+        channel: "whatsapp",
+        to: params.msg.from,
+        accountId: params.route.accountId,
+      },
       responsePrefix,
       onHeartbeatStrip: () => {
         if (!didLogHeartbeatStrip) {

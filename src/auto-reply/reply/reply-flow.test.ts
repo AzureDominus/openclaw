@@ -1206,6 +1206,29 @@ describe("createReplyDispatcher", () => {
     vi.useRealTimers();
   });
 
+  it("retries transient final delivery failures", async () => {
+    vi.useFakeTimers();
+    const deliver: Parameters<typeof createReplyDispatcher>[0]["deliver"] = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("socket hang up"))
+      .mockResolvedValueOnce(undefined);
+    const onError = vi.fn();
+    const dispatcher = createReplyDispatcher({
+      deliver,
+      onError,
+      blockRetry: { attempts: 2, minDelayMs: 5, maxDelayMs: 5, jitter: 0 },
+    });
+
+    dispatcher.sendFinalReply({ text: "final" });
+    const idle = dispatcher.waitForIdle();
+    await vi.advanceTimersByTimeAsync(5);
+    await idle;
+
+    expect(deliver).toHaveBeenCalledTimes(2);
+    expect(onError).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
   it("does not retry non-transient block delivery failures", async () => {
     const err = new Error("400 bad request");
     const deliver: Parameters<typeof createReplyDispatcher>[0]["deliver"] = vi

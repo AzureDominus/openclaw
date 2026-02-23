@@ -37,13 +37,16 @@ describe("createBlockReplyPipeline", () => {
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
     expect(pipeline.didStream()).toBe(false);
-    expect(pipeline.isAborted()).toBe(false);
+    expect(pipeline.isAborted()).toBe(true);
   });
 
-  it("aborts on timeout and skips retries to preserve ordering", async () => {
+  it("marks timeout as degraded but still processes later block replies", async () => {
     vi.useFakeTimers();
     let sawAbort = false;
-    const onBlockReply = vi.fn((_: ReplyPayload, context?: BlockReplyContext) => {
+    const onBlockReply = vi.fn((payload: ReplyPayload, context?: BlockReplyContext) => {
+      if (payload.text === "chunk-2") {
+        return Promise.resolve();
+      }
       return new Promise<void>((resolve) => {
         context?.abortSignal?.addEventListener(
           "abort",
@@ -62,13 +65,15 @@ describe("createBlockReplyPipeline", () => {
       retry: { attempts: 3, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
     });
 
-    pipeline.enqueue({ text: "chunk" });
+    pipeline.enqueue({ text: "chunk-1" });
+    pipeline.enqueue({ text: "chunk-2" });
     const flushPromise = pipeline.flush();
     await vi.advanceTimersByTimeAsync(5);
     await flushPromise;
 
-    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(onBlockReply).toHaveBeenCalledTimes(2);
     expect(sawAbort).toBe(true);
+    expect(pipeline.didStream()).toBe(true);
     expect(pipeline.isAborted()).toBe(true);
     vi.useRealTimers();
   });

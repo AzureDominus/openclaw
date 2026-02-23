@@ -203,6 +203,12 @@ export async function monitorLineProvider(
           cfg: config,
           dispatcherOptions: {
             ...prefixOptions,
+            stripStopReasonMarker: true,
+            durableRoute: {
+              channel: "line",
+              to: ctxPayload.From,
+              accountId: ctx.accountId,
+            },
             deliver: async (payload, _info) => {
               const lineData = (payload.channelData?.line as LineChannelData | undefined) ?? {};
 
