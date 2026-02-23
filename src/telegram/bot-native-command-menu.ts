@@ -3,8 +3,11 @@ import {
   normalizeTelegramCommandName,
   TELEGRAM_COMMAND_NAME_PATTERN,
 } from "../config/telegram-custom-commands.js";
+import { createTelegramRetryRunner } from "../infra/retry-policy.js";
+import type { RetryConfig } from "../infra/retry.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
+import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 
 export const TELEGRAM_MAX_COMMANDS = 100;
 
@@ -77,27 +80,38 @@ export function syncTelegramMenuCommands(params: {
   bot: Bot;
   runtime: RuntimeEnv;
   commandsToRegister: TelegramMenuCommand[];
+  retry?: RetryConfig;
+  configRetry?: RetryConfig;
+  verbose?: boolean;
 }): void {
-  const { bot, runtime, commandsToRegister } = params;
+  const { bot, runtime, commandsToRegister, retry, configRetry, verbose } = params;
   const sync = async () => {
+    const request = createTelegramRetryRunner({
+      retry,
+      configRetry,
+      verbose,
+      shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "unknown" }),
+    });
+
+    const requestWithLogging = async <T>(operation: string, fn: () => Promise<T>) =>
+      withTelegramApiErrorLogging({
+        operation,
+        runtime,
+        fn: () => request(fn, operation),
+      });
+
     // Keep delete -> set ordering to avoid stale deletions racing after fresh registrations.
     if (typeof bot.api.deleteMyCommands === "function") {
-      await withTelegramApiErrorLogging({
-        operation: "deleteMyCommands",
-        runtime,
-        fn: () => bot.api.deleteMyCommands(),
-      }).catch(() => {});
+      await requestWithLogging("deleteMyCommands", () => bot.api.deleteMyCommands()).catch(
+        () => {},
+      );
     }
 
     if (commandsToRegister.length === 0) {
       return;
     }
 
-    await withTelegramApiErrorLogging({
-      operation: "setMyCommands",
-      runtime,
-      fn: () => bot.api.setMyCommands(commandsToRegister),
-    });
+    await requestWithLogging("setMyCommands", () => bot.api.setMyCommands(commandsToRegister));
   };
 
   void sync().catch((err) => {
