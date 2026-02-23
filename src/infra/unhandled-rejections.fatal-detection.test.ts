@@ -109,6 +109,20 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
       );
     });
 
+    it("does not exit on benign browser dialog race errors", () => {
+      const browserRaceError = new Error(
+        "Protocol error (Page.handleJavaScriptDialog): No dialog is showing",
+      );
+
+      process.emit("unhandledRejection", browserRaceError, Promise.resolve());
+
+      expect(exitCalls).toEqual([]);
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
+        "[openclaw] Non-fatal unhandled rejection (continuing):",
+        expect.stringContaining("No dialog is showing"),
+      );
+    });
+
     it("exits on generic errors without code", () => {
       const genericErr = new Error("Something went wrong");
 

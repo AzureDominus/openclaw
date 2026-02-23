@@ -163,6 +163,44 @@ function isConfigError(err: unknown): boolean {
   return code !== undefined && CONFIG_ERROR_CODES.has(code);
 }
 
+function getErrorMessage(err: unknown): string {
+  if (!err || typeof err !== "object") {
+    return "";
+  }
+  const message = (err as { message?: unknown }).message;
+  return typeof message === "string" ? message : "";
+}
+
+/**
+ * Patchright/Playwright can race while handling JS dialogs and emit:
+ * "Protocol error (Page.handleJavaScriptDialog): No dialog is showing"
+ * Treat this as non-fatal so the gateway doesn't restart on benign browser races.
+ */
+function isBenignBrowserDialogRaceError(err: unknown): boolean {
+  if (!err) {
+    return false;
+  }
+
+  const message = getErrorMessage(err);
+  if (
+    message.includes("Protocol error (Page.handleJavaScriptDialog)") &&
+    message.includes("No dialog is showing")
+  ) {
+    return true;
+  }
+
+  const cause = getErrorCause(err);
+  if (cause && cause !== err && isBenignBrowserDialogRaceError(cause)) {
+    return true;
+  }
+
+  if (err instanceof AggregateError && err.errors?.length) {
+    return err.errors.some((error) => isBenignBrowserDialogRaceError(error));
+  }
+
+  return false;
+}
+
 /**
  * Checks if an error is a transient network error that shouldn't crash the gateway.
  * These are typically temporary connectivity issues that will resolve on their own.
@@ -257,6 +295,14 @@ export function installUnhandledRejectionHandler(): void {
     }
 
     if (isTransientNetworkError(reason)) {
+      console.warn(
+        "[openclaw] Non-fatal unhandled rejection (continuing):",
+        formatUncaughtError(reason),
+      );
+      return;
+    }
+
+    if (isBenignBrowserDialogRaceError(reason)) {
       console.warn(
         "[openclaw] Non-fatal unhandled rejection (continuing):",
         formatUncaughtError(reason),
