@@ -447,6 +447,7 @@ export const registerTelegramNativeCommands = ({
     commandsToRegister,
     accountId,
     botIdentity: opts.token,
+    configRetry: telegramCfg.retry,
   });
 
   const resolveCommandRuntimeContext = async (params: {
