@@ -1,10 +1,12 @@
 import { createHash } from "node:crypto";
 import type { Bot } from "grammy";
+import { createTelegramRetryRunner, type RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString, readStringValue } from "openclaw/plugin-sdk/text-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { normalizeTelegramCommandName, TELEGRAM_COMMAND_NAME_PATTERN } from "./command-config.js";
+import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 
 export const TELEGRAM_MAX_COMMANDS = 100;
 export const TELEGRAM_TOTAL_COMMAND_TEXT_BUDGET = 5700;
@@ -238,9 +240,32 @@ export function syncTelegramMenuCommands(params: {
   commandsToRegister: TelegramMenuCommand[];
   accountId?: string;
   botIdentity?: string;
+  retry?: RetryConfig;
+  configRetry?: RetryConfig;
+  verbose?: boolean;
 }): void {
-  const { bot, runtime, commandsToRegister, accountId, botIdentity } = params;
+  const { bot, runtime, commandsToRegister, accountId, botIdentity, retry, configRetry, verbose } =
+    params;
   const sync = async () => {
+    const request = createTelegramRetryRunner({
+      retry,
+      configRetry,
+      verbose,
+      shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "unknown" }),
+    });
+
+    const requestWithLogging = async <T>(
+      operation: string,
+      fn: () => Promise<T>,
+      shouldLog?: (err: unknown) => boolean,
+    ) =>
+      withTelegramApiErrorLogging({
+        operation,
+        runtime,
+        shouldLog,
+        fn: () => request(fn, operation),
+      });
+
     // Skip sync if the command list hasn't changed since the last successful
     // sync. This prevents hitting Telegram's 429 rate limit when the gateway
     // is restarted several times in quick succession.
@@ -255,11 +280,9 @@ export function syncTelegramMenuCommands(params: {
     // Keep delete -> set ordering to avoid stale deletions racing after fresh registrations.
     let deleteSucceeded = true;
     if (typeof bot.api.deleteMyCommands === "function") {
-      deleteSucceeded = await withTelegramApiErrorLogging({
-        operation: "deleteMyCommands",
-        runtime,
-        fn: () => bot.api.deleteMyCommands(),
-      })
+      deleteSucceeded = await requestWithLogging("deleteMyCommands", () =>
+        bot.api.deleteMyCommands(),
+      )
         .then(() => true)
         .catch(() => false);
     }
@@ -277,12 +300,11 @@ export function syncTelegramMenuCommands(params: {
     const initialCommandCount = commandsToRegister.length;
     while (retryCommands.length > 0) {
       try {
-        await withTelegramApiErrorLogging({
-          operation: "setMyCommands",
-          runtime,
-          shouldLog: (err) => !isBotCommandsTooMuchError(err),
-          fn: () => bot.api.setMyCommands(retryCommands),
-        });
+        await requestWithLogging(
+          "setMyCommands",
+          () => bot.api.setMyCommands(retryCommands),
+          (err) => !isBotCommandsTooMuchError(err),
+        );
         if (retryCommands.length < initialCommandCount) {
           runtime.log?.(
             formatTelegramCommandRetrySuccessLog({

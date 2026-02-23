@@ -349,4 +349,62 @@ describe("bot-native-command-menu", () => {
       "Telegram rejected 10 commands (BOT_COMMANDS_TOO_MUCH); retrying with 8.",
     );
   });
+
+  it("retries recoverable network failures during command sync", async () => {
+    const deleteMyCommands = vi.fn(async () => undefined);
+    const setMyCommands = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error("Network request for 'setMyCommands' failed!"))
+      .mockResolvedValue(undefined);
+    const error = vi.fn();
+
+    syncTelegramMenuCommands({
+      bot: {
+        api: {
+          deleteMyCommands,
+          setMyCommands,
+        },
+      } as unknown as Parameters<typeof syncTelegramMenuCommands>[0]["bot"],
+      runtime: { error } as unknown as Parameters<typeof syncTelegramMenuCommands>[0]["runtime"],
+      commandsToRegister: [{ command: "cmd", description: "Command" }],
+      accountId: `test-network-retry-${Date.now()}`,
+      botIdentity: "network-retry-bot",
+      retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+    });
+
+    await vi.waitFor(() => {
+      expect(setMyCommands).toHaveBeenCalledTimes(2);
+    });
+    expect(error).not.toHaveBeenCalled();
+  });
+
+  it("does not retry non-recoverable command sync failures", async () => {
+    const deleteMyCommands = vi.fn(async () => undefined);
+    const setMyCommands = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValue(new Error("400: Bad Request: command description is invalid"));
+    const error = vi.fn();
+
+    syncTelegramMenuCommands({
+      bot: {
+        api: {
+          deleteMyCommands,
+          setMyCommands,
+        },
+      } as unknown as Parameters<typeof syncTelegramMenuCommands>[0]["bot"],
+      runtime: { error } as unknown as Parameters<typeof syncTelegramMenuCommands>[0]["runtime"],
+      commandsToRegister: [{ command: "cmd", description: "Command" }],
+      accountId: `test-nonrecoverable-${Date.now()}`,
+      botIdentity: "nonrecoverable-bot",
+      retry: { attempts: 3, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+    });
+
+    await vi.waitFor(() => {
+      expect(error).toHaveBeenCalled();
+    });
+    expect(setMyCommands).toHaveBeenCalledTimes(1);
+    expect(
+      error.mock.calls.some((call) => String(call[0]).includes("Telegram command sync failed")),
+    ).toBe(true);
+  });
 });
