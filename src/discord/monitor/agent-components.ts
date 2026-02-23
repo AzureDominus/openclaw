@@ -1005,6 +1005,11 @@ async function dispatchDiscordComponentEvent(params: {
     dispatcherOptions: {
       ...prefixOptions,
       humanDelay: resolveHumanDelayConfig(ctx.cfg, agentId),
+      durableRoute: {
+        channel: "discord",
+        to: deliverTarget,
+        accountId,
+      },
       deliver: async (payload) => {
         const replyToId = replyReference.use();
         await deliverDiscordReply({

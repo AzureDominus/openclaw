@@ -399,6 +399,13 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     const dispatcher = createReplyDispatcher({
       ...prefixOptions,
       humanDelay: resolveHumanDelayConfig(cfg, decision.route.agentId),
+      durableRoute: ctxPayload.To
+        ? {
+            channel: "imessage",
+            to: ctxPayload.To,
+            accountId: accountInfo.accountId,
+          }
+        : undefined,
       deliver: async (payload) => {
         const target = ctxPayload.To;
         if (!target) {

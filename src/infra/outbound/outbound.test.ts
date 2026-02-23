@@ -3,7 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../../auto-reply/types.js";
+import { telegramPlugin } from "../../../extensions/telegram/src/channel.js";
+import { whatsappPlugin } from "../../../extensions/whatsapp/src/channel.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { typedCases } from "../../test-utils/typed-cases.js";
 import {
   ackDelivery,
@@ -180,6 +184,8 @@ describe("delivery-queue", () => {
       expect(typeof entry.lastAttemptAt).toBe("number");
       expect(entry.lastAttemptAt).toBeGreaterThan(0);
       expect(entry.lastError).toBe("connection refused");
+      expect(typeof entry.nextAttemptAt).toBe("number");
+      expect(entry.nextAttemptAt).toBeGreaterThan(Date.now() - 60_000);
     });
   });
 
@@ -505,12 +511,16 @@ describe("delivery-queue", () => {
       expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("deferred to next restart"));
     });
 
-    it("defers entries until backoff becomes eligible", async () => {
+    it("defers entries when the persisted next-attempt time exceeds recovery budget", async () => {
       const id = await enqueueDelivery(
         { channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] },
         tmpDir,
       );
-      setEntryState(id, { retryCount: 3, lastAttemptAt: Date.now() });
+      const filePath = path.join(tmpDir, "delivery-queue", `${id}.json`);
+      const entry = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+      entry.retryCount = 3;
+      entry.nextAttemptAt = Date.now() + 60_000;
+      fs.writeFileSync(filePath, JSON.stringify(entry), "utf-8");
 
       const deliver = vi.fn().mockResolvedValue([]);
       const { result, log } = await runRecovery({
@@ -601,6 +611,30 @@ describe("delivery-queue", () => {
       expect(remaining).toHaveLength(0);
 
       vi.useRealTimers();
+    });
+
+    it("retries legacy entries without nextAttemptAt immediately", async () => {
+      const id = await enqueueDelivery(
+        { channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] },
+        tmpDir,
+      );
+      const filePath = path.join(tmpDir, "delivery-queue", `${id}.json`);
+      const entry = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+      delete entry.nextAttemptAt;
+      entry.retryCount = 4;
+      fs.writeFileSync(filePath, JSON.stringify(entry), "utf-8");
+
+      const deliver = vi.fn().mockResolvedValue([]);
+      const delay = vi.fn(async () => {});
+      const { result } = await runRecovery({
+        deliver,
+        delay,
+        maxRecoveryMs: 1000,
+      });
+
+      expect(delay).not.toHaveBeenCalled();
+      expect(deliver).toHaveBeenCalledTimes(1);
+      expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
     });
 
     it("returns zeros when queue is empty", async () => {

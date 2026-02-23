@@ -46,6 +46,8 @@ type QueuedDeliveryPayload = {
 export interface QueuedDelivery extends QueuedDeliveryPayload {
   id: string;
   enqueuedAt: number;
+  /** Absolute timestamp when this entry is eligible for retry. */
+  nextAttemptAt?: number;
   retryCount: number;
   lastAttemptAt?: number;
   lastError?: string;
@@ -115,6 +117,7 @@ export async function enqueueDelivery(
   const entry: QueuedDelivery = {
     id,
     enqueuedAt: Date.now(),
+    nextAttemptAt: Date.now(),
     channel: params.channel,
     to: params.to,
     accountId: params.accountId,
@@ -171,6 +174,7 @@ export async function failDelivery(id: string, error: string, stateDir?: string)
   entry.retryCount += 1;
   entry.lastAttemptAt = Date.now();
   entry.lastError = error;
+  entry.nextAttemptAt = Date.now() + computeBackoffMs(entry.retryCount);
   const tmp = `${filePath}.${process.pid}.tmp`;
   await fs.promises.writeFile(tmp, JSON.stringify(entry, null, 2), {
     encoding: "utf-8",
@@ -253,6 +257,10 @@ export function isEntryEligibleForRecoveryRetry(
   entry: QueuedDelivery,
   now: number,
 ): { eligible: true } | { eligible: false; remainingBackoffMs: number } {
+  if (typeof entry.nextAttemptAt === "number" && Number.isFinite(entry.nextAttemptAt)) {
+    const remainingBackoffMs = Math.max(0, Math.trunc(entry.nextAttemptAt - now));
+    return remainingBackoffMs > 0 ? { eligible: false, remainingBackoffMs } : { eligible: true };
+  }
   const backoff = computeBackoffMs(entry.retryCount + 1);
   if (backoff <= 0) {
     return { eligible: true };

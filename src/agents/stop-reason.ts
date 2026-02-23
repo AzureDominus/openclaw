@@ -4,6 +4,8 @@ const STOP_REASON_TRAILING_PARSE_RE =
   /(?:^|\r?\n)[ \t]*OPENCLAW_STOP_REASON[ \t]*:[ \t]*([^\r\n]+)[ \t]*(?:\r?\n[ \t]*)*$/i;
 const STOP_REASON_TRAILING_STRIP_RE =
   /(?:\r?\n)?[ \t]*OPENCLAW_STOP_REASON[ \t]*:[ \t]*[^\r\n]*[ \t]*(?:\r?\n[ \t]*)*$/i;
+const STOP_REASON_LINE_STRIP_RE =
+  /(?:^|\r?\n)[ \t]*OPENCLAW_STOP_REASON[ \t]*:[ \t]*[^\r\n]*[ \t]*(?=\r?\n|$)/gi;
 
 function normalizeDeclaredStopReason(raw: string): DeclaredStopReason | undefined {
   const normalized = raw
@@ -58,7 +60,8 @@ export function stripDeclaredStopReasonLine(text: string): string {
   if (!text.trim()) {
     return text;
   }
-  const stripped = text.replace(STOP_REASON_TRAILING_STRIP_RE, "");
+  const strippedTrailing = text.replace(STOP_REASON_TRAILING_STRIP_RE, "");
+  const stripped = strippedTrailing.replace(STOP_REASON_LINE_STRIP_RE, "");
   return stripped.replace(/\n{3,}/g, "\n\n").trim();
 }
 
