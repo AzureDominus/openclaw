@@ -1,4 +1,6 @@
 import { logVerbose } from "../../globals.js";
+import { extractErrorCode, formatErrorMessage } from "../../infra/errors.js";
+import { type RetryConfig, resolveRetryConfig, retryAsync } from "../../infra/retry.js";
 import type { ReplyPayload } from "../types.js";
 import { createBlockReplyCoalescer } from "./block-reply-coalescer.js";
 import type { BlockStreamingCoalescing } from "./block-streaming.js";
@@ -69,16 +71,48 @@ const withTimeout = async <T>(
   }
 };
 
+const BLOCK_REPLY_RETRY_DEFAULTS = {
+  attempts: 3,
+  minDelayMs: 400,
+  maxDelayMs: 5_000,
+  jitter: 0.1,
+};
+
+const BLOCK_REPLY_TRANSIENT_ERRNO_CODES = new Set([
+  "ECONNRESET",
+  "ECONNABORTED",
+  "ECONNREFUSED",
+  "ETIMEDOUT",
+  "EAI_AGAIN",
+  "ENOTFOUND",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "EPIPE",
+]);
+
+const BLOCK_REPLY_TRANSIENT_ERROR_RE =
+  /429|408|5\d\d|rate limit|retry after|timeout|timed out|network|socket|connect|connection|reset|closed|temporar|unavailable|fetch failed|try again/i;
+
+function shouldRetryBlockReplyError(err: unknown): boolean {
+  const code = extractErrorCode(err)?.toUpperCase();
+  if (code && BLOCK_REPLY_TRANSIENT_ERRNO_CODES.has(code)) {
+    return true;
+  }
+  return BLOCK_REPLY_TRANSIENT_ERROR_RE.test(formatErrorMessage(err));
+}
+
 export function createBlockReplyPipeline(params: {
   onBlockReply: (
     payload: ReplyPayload,
     options?: { abortSignal?: AbortSignal; timeoutMs?: number },
   ) => Promise<void> | void;
   timeoutMs: number;
+  retry?: RetryConfig;
   coalescing?: BlockStreamingCoalescing;
   buffer?: BlockReplyBuffer;
 }): BlockReplyPipeline {
-  const { onBlockReply, timeoutMs, coalescing, buffer } = params;
+  const { onBlockReply, timeoutMs, coalescing, buffer, retry } = params;
+  const retryConfig = resolveRetryConfig(BLOCK_REPLY_RETRY_DEFAULTS, retry);
   const sentKeys = new Set<string>();
   const pendingKeys = new Set<string>();
   const seenKeys = new Set<string>();
@@ -113,13 +147,27 @@ export function createBlockReplyPipeline(params: {
         if (aborted) {
           return false;
         }
-        await withTimeout(
-          onBlockReply(payload, {
-            abortSignal: abortController.signal,
-            timeoutMs,
-          }) ?? Promise.resolve(),
-          timeoutMs,
-          timeoutError,
+        await retryAsync(
+          () =>
+            withTimeout(
+              onBlockReply(payload, {
+                abortSignal: abortController.signal,
+                timeoutMs,
+              }) ?? Promise.resolve(),
+              timeoutMs,
+              timeoutError,
+            ),
+          {
+            ...retryConfig,
+            label: "block reply",
+            shouldRetry: (err) => err !== timeoutError && shouldRetryBlockReplyError(err),
+            onRetry: (info) => {
+              const maxRetries = Math.max(1, info.maxAttempts - 1);
+              logVerbose(
+                `block reply delivery retry ${info.attempt}/${maxRetries} in ${info.delayMs}ms: ${formatErrorMessage(info.err)}`,
+              );
+            },
+          },
         );
         return true;
       })
@@ -142,7 +190,7 @@ export function createBlockReplyPipeline(params: {
           }
           return;
         }
-        logVerbose(`block reply delivery failed: ${String(err)}`);
+        logVerbose(`block reply delivery failed: ${formatErrorMessage(err)}`);
       })
       .finally(() => {
         pendingKeys.delete(payloadKey);

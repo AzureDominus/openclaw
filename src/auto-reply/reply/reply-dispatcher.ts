@@ -1,5 +1,8 @@
 import type { TypingCallbacks } from "../../channels/typing.js";
 import type { HumanDelayConfig } from "../../config/types.js";
+import { logVerbose } from "../../globals.js";
+import { extractErrorCode, formatErrorMessage } from "../../infra/errors.js";
+import { type RetryConfig, resolveRetryConfig, retryAsync } from "../../infra/retry.js";
 import { sleep } from "../../utils.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { registerDispatcher } from "./dispatcher-registry.js";
@@ -23,6 +26,35 @@ type ReplyDispatchDeliverer = (
 
 const DEFAULT_HUMAN_DELAY_MIN_MS = 800;
 const DEFAULT_HUMAN_DELAY_MAX_MS = 2500;
+const BLOCK_DELIVERY_RETRY_DEFAULTS = {
+  attempts: 3,
+  minDelayMs: 400,
+  maxDelayMs: 5_000,
+  jitter: 0.1,
+};
+
+const BLOCK_DELIVERY_TRANSIENT_ERRNO_CODES = new Set([
+  "ECONNRESET",
+  "ECONNABORTED",
+  "ECONNREFUSED",
+  "ETIMEDOUT",
+  "EAI_AGAIN",
+  "ENOTFOUND",
+  "EHOSTUNREACH",
+  "ENETUNREACH",
+  "EPIPE",
+]);
+
+const BLOCK_DELIVERY_TRANSIENT_ERROR_RE =
+  /429|408|5\d\d|rate limit|retry after|timeout|timed out|network|socket|connect|connection|reset|closed|temporar|unavailable|fetch failed|try again/i;
+
+function shouldRetryBlockDelivery(err: unknown): boolean {
+  const code = extractErrorCode(err)?.toUpperCase();
+  if (code && BLOCK_DELIVERY_TRANSIENT_ERRNO_CODES.has(code)) {
+    return true;
+  }
+  return BLOCK_DELIVERY_TRANSIENT_ERROR_RE.test(formatErrorMessage(err));
+}
 
 /** Generate a random delay within the configured range. */
 function getHumanDelay(config: HumanDelayConfig | undefined): number {
@@ -55,6 +87,8 @@ export type ReplyDispatcherOptions = {
   onSkip?: ReplyDispatchSkipHandler;
   /** Human-like delay between block replies for natural rhythm. */
   humanDelay?: HumanDelayConfig;
+  /** Retry policy for transient block-delivery failures in shared dispatch. */
+  blockRetry?: RetryConfig;
   /** Strip OPENCLAW_STOP_REASON marker lines before delivery. */
   stripStopReasonMarker?: boolean;
   /** Strip leaked plain-text tool-call drafts before delivery. */
@@ -114,6 +148,7 @@ function normalizeReplyPayloadInternal(
 }
 
 export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDispatcher {
+  const blockRetryConfig = resolveRetryConfig(BLOCK_DELIVERY_RETRY_DEFAULTS, options.blockRetry);
   let sendChain: Promise<void> = Promise.resolve();
   // Track in-flight deliveries so we can emit a reliable "idle" signal.
   // Start with pending=1 as a "reservation" to prevent premature gateway restart.
@@ -168,7 +203,21 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         }
         // Safe: deliver is called inside an async .then() callback, so even a synchronous
         // throw becomes a rejection that flows through .catch()/.finally(), ensuring cleanup.
-        await options.deliver(normalized, { kind });
+        if (kind === "block") {
+          await retryAsync(() => options.deliver(normalized, { kind }), {
+            ...blockRetryConfig,
+            label: "block reply delivery",
+            shouldRetry: (err) => shouldRetryBlockDelivery(err),
+            onRetry: (info) => {
+              const maxRetries = Math.max(1, info.maxAttempts - 1);
+              logVerbose(
+                `block reply delivery retry ${info.attempt}/${maxRetries} in ${info.delayMs}ms: ${formatErrorMessage(info.err)}`,
+              );
+            },
+          });
+        } else {
+          await options.deliver(normalized, { kind });
+        }
       })
       .catch((err) => {
         options.onError?.(err, { kind });

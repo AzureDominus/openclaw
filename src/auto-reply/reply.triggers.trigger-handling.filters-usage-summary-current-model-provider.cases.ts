@@ -79,6 +79,27 @@ export function registerTriggerHandlingUsageSummaryCases(params: {
         }
 
         {
+          runEmbeddedPiAgentMock.mockClear();
+          const res = await getReplyFromConfig(
+            {
+              Body: "/usage context",
+              From: "+1000",
+              To: "+2000",
+              Provider: "whatsapp",
+              SenderE164: "+1000",
+              CommandAuthorized: true,
+            },
+            undefined,
+            makeCfg(home),
+          );
+          const text = Array.isArray(res) ? res[0]?.text : res?.text;
+          expect(text).toContain("Usage context");
+          expect(text).toContain("model:");
+          expect(text).toContain("context:");
+          expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+        }
+
+        {
           const cfg = makeCfg(home);
           cfg.session = { ...cfg.session, store: join(home, "usage-cycle.sessions.json") };
           const usageStorePath = requireSessionStorePath(cfg);

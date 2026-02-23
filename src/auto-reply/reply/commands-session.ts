@@ -78,6 +78,22 @@ function formatCostWindowLine(
   return `${label}: ${cost ?? "n/a"}${partial}${tokenPart}`;
 }
 
+function formatUsageContextLine(params: {
+  contextWindowTokens?: number;
+  usedTokens?: number;
+}): string {
+  const contextWindowTokens = params.contextWindowTokens;
+  const usedTokens = params.usedTokens;
+  if (!contextWindowTokens || contextWindowTokens <= 0) {
+    return "context: unavailable";
+  }
+  if (usedTokens == null || usedTokens < 0) {
+    return `context: ?/${formatTokenCount(contextWindowTokens)}`;
+  }
+  const pct = Math.min(999, Math.round((usedTokens / contextWindowTokens) * 100));
+  return `context: ${formatTokenCount(usedTokens)}/${formatTokenCount(contextWindowTokens)} (${pct}%)`;
+}
+
 async function loadCurrentProviderUsage(
   params: Pick<HandleCommandsParams, "provider" | "cfg" | "agentId">,
   nowMs: number,
@@ -332,6 +348,7 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
   const lowerArgs = rawArgs.toLowerCase();
   const requested = rawArgs ? normalizeUsageDisplay(rawArgs) : undefined;
   const isCostRequest = lowerArgs.startsWith("cost");
+  const isContextRequest = lowerArgs === "context";
   const isQuotaRequest = !rawArgs || lowerArgs === "quota" || lowerArgs === "rate";
   const isNextRequest = lowerArgs === "next";
 
@@ -407,10 +424,54 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
     };
   }
 
+  if (isContextRequest) {
+    const contextWindowTokens =
+      (typeof params.sessionEntry?.contextTokens === "number" &&
+      Number.isFinite(params.sessionEntry.contextTokens)
+        ? params.sessionEntry.contextTokens
+        : undefined) ??
+      (typeof params.contextTokens === "number" && Number.isFinite(params.contextTokens)
+        ? params.contextTokens
+        : undefined);
+    const usedTokens =
+      typeof params.sessionEntry?.totalTokens === "number" &&
+      Number.isFinite(params.sessionEntry.totalTokens)
+        ? params.sessionEntry.totalTokens
+        : typeof params.sessionEntry?.inputTokens === "number" &&
+            Number.isFinite(params.sessionEntry.inputTokens) &&
+            typeof params.sessionEntry?.outputTokens === "number" &&
+            Number.isFinite(params.sessionEntry.outputTokens)
+          ? params.sessionEntry.inputTokens + params.sessionEntry.outputTokens
+          : undefined;
+    const remainingTokens =
+      typeof contextWindowTokens === "number" &&
+      Number.isFinite(contextWindowTokens) &&
+      typeof usedTokens === "number" &&
+      Number.isFinite(usedTokens)
+        ? Math.max(0, contextWindowTokens - usedTokens)
+        : undefined;
+
+    return {
+      shouldContinue: false,
+      reply: {
+        text: [
+          "Usage context",
+          `model: ${params.provider}/${params.model}`,
+          formatUsageContextLine({ contextWindowTokens, usedTokens }),
+          typeof remainingTokens === "number"
+            ? `remaining: ${formatTokenCount(remainingTokens)}`
+            : undefined,
+        ]
+          .filter(Boolean)
+          .join("\n"),
+      },
+    };
+  }
+
   if (rawArgs && !requested && !isNextRequest) {
     return {
       shouldContinue: false,
-      reply: { text: "Usage: /usage | /usage rate|cost|next|off|tokens|full" },
+      reply: { text: "Usage: /usage | /usage rate|cost|context|next|off|tokens|full" },
     };
   }
 

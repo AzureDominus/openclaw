@@ -103,9 +103,9 @@ describe("gateway server chat", () => {
 
       const spy = vi.mocked(getReplyFromConfig);
       spy.mockClear();
-      const spyCalls = spy.mock.calls as unknown[][];
+      const getSpyCalls = () => spy.mock.calls as unknown[][];
       testState.agentConfig = { timeoutSeconds: 123 };
-      const callsBeforeTimeout = spyCalls.length;
+      const callsBeforeTimeout = getSpyCalls().length;
       const timeoutRes = await rpcReq(ws, "chat.send", {
         sessionKey: "main",
         message: "hello",
@@ -113,11 +113,13 @@ describe("gateway server chat", () => {
       });
       expect(timeoutRes.ok).toBe(true);
 
-      await waitFor(() => spyCalls.length > callsBeforeTimeout);
-      const timeoutCall = spyCalls.at(-1)?.[1] as { runId?: string } | undefined;
+      await waitFor(() => getSpyCalls().length > callsBeforeTimeout);
+      const timeoutCall = getSpyCalls().at(-1)?.[1] as { runId?: string } | undefined;
       expect(timeoutCall?.runId).toBe("idem-timeout-1");
       testState.agentConfig = undefined;
 
+      spy.mockClear();
+      const callsBeforeSession = getSpyCalls().length;
       const sessionRes = await rpcReq(ws, "chat.send", {
         sessionKey: "agent:main:subagent:abc",
         message: "hello",
@@ -125,6 +127,10 @@ describe("gateway server chat", () => {
       });
       expect(sessionRes.ok).toBe(true);
       expect(sessionRes.payload?.runId).toBe("idem-session-key-1");
+
+      await waitFor(() => getSpyCalls().length > callsBeforeSession);
+      const sessionCall = getSpyCalls().at(-1)?.[0] as { SessionKey?: string } | undefined;
+      expect(sessionCall?.SessionKey).toBe("agent:main:subagent:abc");
 
       const sendPolicyDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
       tempDirs.push(sendPolicyDir);
@@ -197,6 +203,8 @@ describe("gateway server chat", () => {
       testState.sessionStorePath = undefined;
       testState.sessionConfig = undefined;
 
+      spy.mockClear();
+      const callsBeforeImage = getSpyCalls().length;
       const pngB64 =
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
 
@@ -229,6 +237,14 @@ describe("gateway server chat", () => {
       );
       expect(imgRes.ok).toBe(true);
       expect(imgRes.payload?.runId).toBeDefined();
+
+      await waitFor(() => getSpyCalls().length > callsBeforeImage, 8000);
+      const imgOpts = getSpyCalls().at(-1)?.[1] as
+        | { images?: Array<{ type: string; data: string; mimeType: string }> }
+        | undefined;
+      expect(imgOpts?.images).toEqual([{ type: "image", data: pngB64, mimeType: "image/png" }]);
+
+      const callsBeforeImageOnly = getSpyCalls().length;
       const reqIdOnly = "chat-img-only";
       ws.send(
         JSON.stringify({
@@ -259,6 +275,11 @@ describe("gateway server chat", () => {
       expect(imgOnlyRes.ok).toBe(true);
       expect(imgOnlyRes.payload?.runId).toBeDefined();
 
+      await waitFor(() => getSpyCalls().length > callsBeforeImageOnly, 8000);
+      const imgOnlyOpts = getSpyCalls().at(-1)?.[1] as
+        | { images?: Array<{ type: string; data: string; mimeType: string }> }
+        | undefined;
+      expect(imgOnlyOpts?.images).toEqual([{ type: "image", data: pngB64, mimeType: "image/png" }]);
       const historyDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
       tempDirs.push(historyDir);
       testState.sessionStorePath = path.join(historyDir, "sessions.json");
@@ -332,6 +353,15 @@ describe("gateway server chat", () => {
       });
 
       const spy = vi.mocked(agentCommand);
+      const replySpy = vi.mocked(getReplyFromConfig);
+      replySpy.mockReset();
+      replySpy.mockImplementation(async (ctx) => {
+        const body = typeof ctx.Body === "string" ? ctx.Body.trim() : "";
+        if (body === "/context list") {
+          return { text: "Context report" };
+        }
+        return undefined;
+      });
       const callsBefore = spy.mock.calls.length;
       const eventPromise = onceMessage(
         ws,
@@ -350,9 +380,88 @@ describe("gateway server chat", () => {
       expect(res.ok).toBe(true);
       await eventPromise;
       expect(spy.mock.calls.length).toBe(callsBefore);
+
+      const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
+        sessionKey: "main",
+      });
+      expect(historyRes.ok).toBe(true);
+      expect(historyRes.payload?.messages ?? []).toHaveLength(0);
     } finally {
+      vi.mocked(getReplyFromConfig).mockReset();
+      vi.mocked(getReplyFromConfig).mockResolvedValue(undefined);
       testState.sessionStorePath = undefined;
       await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("handles slash commands while another run in the same session is active", async () => {
+    let releaseMainRun: (() => void) | undefined;
+    const replySpy = vi.mocked(getReplyFromConfig);
+    replySpy.mockReset();
+    replySpy.mockImplementation(async (ctx, opts) => {
+      const body = typeof ctx.Body === "string" ? ctx.Body.trim() : "";
+      if (body === "/context list") {
+        return { text: "Context report" };
+      }
+      if (body === "hello") {
+        opts?.onAgentRunStart?.("run-main");
+        await new Promise<void>((resolve) => {
+          releaseMainRun = resolve;
+        });
+        return { text: "done" };
+      }
+      return undefined;
+    });
+
+    try {
+      const mainStart = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "hello",
+        idempotencyKey: "idem-busy-main",
+      });
+      expect(mainStart.ok).toBe(true);
+      expect(mainStart.payload?.status).toBe("started");
+
+      const slashFinalPromise = onceMessage(
+        ws,
+        (o) =>
+          o.type === "event" &&
+          o.event === "chat" &&
+          o.payload?.state === "final" &&
+          o.payload?.runId === "idem-busy-slash",
+        8000,
+      );
+      const slashStart = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "/context list",
+        idempotencyKey: "idem-busy-slash",
+      });
+      expect(slashStart.ok).toBe(true);
+      await slashFinalPromise;
+
+      const abortRes = await rpcReq(ws, "chat.abort", {
+        sessionKey: "main",
+        runId: "idem-busy-main",
+      });
+      expect(abortRes.ok).toBe(true);
+      expect(abortRes.payload?.aborted).toBe(true);
+      expect(
+        replySpy.mock.calls.some((call) => {
+          const ctx = call[0] as { Body?: string } | undefined;
+          return ctx?.Body === "/context list";
+        }),
+      ).toBe(true);
+      expect(
+        replySpy.mock.calls.some((call) => {
+          const ctx = call[0] as { Body?: string } | undefined;
+          return ctx?.Body === "hello";
+        }),
+      ).toBe(true);
+      releaseMainRun?.();
+    } finally {
+      releaseMainRun?.();
+      replySpy.mockReset();
+      replySpy.mockResolvedValue(undefined);
     }
   });
 

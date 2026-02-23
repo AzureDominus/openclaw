@@ -1183,6 +1183,48 @@ describe("createReplyDispatcher", () => {
     expect(delivered).toEqual(["tool", "block", "final"]);
   });
 
+  it("retries transient block delivery failures", async () => {
+    vi.useFakeTimers();
+    const deliver: Parameters<typeof createReplyDispatcher>[0]["deliver"] = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("network timeout"))
+      .mockResolvedValueOnce(undefined);
+    const onError = vi.fn();
+    const dispatcher = createReplyDispatcher({
+      deliver,
+      onError,
+      blockRetry: { attempts: 2, minDelayMs: 5, maxDelayMs: 5, jitter: 0 },
+    });
+
+    dispatcher.sendBlockReply({ text: "block" });
+    const idle = dispatcher.waitForIdle();
+    await vi.advanceTimersByTimeAsync(5);
+    await idle;
+
+    expect(deliver).toHaveBeenCalledTimes(2);
+    expect(onError).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it("does not retry non-transient block delivery failures", async () => {
+    const err = new Error("400 bad request");
+    const deliver: Parameters<typeof createReplyDispatcher>[0]["deliver"] = vi
+      .fn()
+      .mockRejectedValue(err);
+    const onError = vi.fn();
+    const dispatcher = createReplyDispatcher({
+      deliver,
+      onError,
+      blockRetry: { attempts: 3, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+    });
+
+    dispatcher.sendBlockReply({ text: "block" });
+    await dispatcher.waitForIdle();
+
+    expect(deliver).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledWith(err, { kind: "block" });
+  });
+
   it("fires onIdle when the queue drains", async () => {
     const deliver: Parameters<typeof createReplyDispatcher>[0]["deliver"] = async () =>
       await Promise.resolve();
