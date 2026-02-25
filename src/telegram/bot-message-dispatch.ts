@@ -283,6 +283,17 @@ export const dispatchTelegramMessage = async ({
     channel: "telegram",
     accountId: route.accountId,
   });
+  const typingCallbacks = createTypingCallbacks({
+    start: sendTyping,
+    onStartError: (err) => {
+      logTypingFailure({
+        log: logVerbose,
+        channel: "telegram",
+        target: String(chatId),
+        error: err,
+      });
+    },
+  });
   const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "telegram",
@@ -512,17 +523,9 @@ export const dispatchTelegramMessage = async ({
         onError: (err, info) => {
           runtime.error?.(danger(`telegram ${info.kind} reply failed: ${String(err)}`));
         },
-        onReplyStart: createTypingCallbacks({
-          start: sendTyping,
-          onStartError: (err) => {
-            logTypingFailure({
-              log: logVerbose,
-              channel: "telegram",
-              target: String(chatId),
-              error: err,
-            });
-          },
-        }).onReplyStart,
+        onReplyStart: typingCallbacks.onReplyStart,
+        onIdle: typingCallbacks.onIdle,
+        onCleanup: typingCallbacks.onCleanup,
       },
       replyOptions: {
         skillFilter,

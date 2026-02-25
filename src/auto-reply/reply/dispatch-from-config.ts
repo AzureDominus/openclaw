@@ -19,6 +19,7 @@ import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { shouldSuppressReasoningPayload } from "./reply-payloads.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
+import { resolveImmediateResetSessionNoticeText } from "./session-reset-notice.js";
 
 const AUDIO_PLACEHOLDER_RE = /^<media:audio>(\s*\([^)]*\))?$/i;
 const AUDIO_HEADER_RE = /^\[Audio\b/i;
@@ -279,6 +280,42 @@ export async function dispatchReplyFromConfig(params: {
   markProcessing();
 
   try {
+    const immediateResetNoticeText = resolveImmediateResetSessionNoticeText({ ctx, cfg });
+    let resetSessionNoticeHandled = false;
+    if (immediateResetNoticeText) {
+      const resetNoticePayload: ReplyPayload = { text: immediateResetNoticeText };
+      if (shouldRouteToOriginating && originatingChannel && originatingTo) {
+        const result = await routeReply({
+          payload: resetNoticePayload,
+          channel: originatingChannel,
+          to: originatingTo,
+          sessionKey: ctx.SessionKey,
+          accountId: ctx.AccountId,
+          threadId: ctx.MessageThreadId,
+          cfg,
+        });
+        resetSessionNoticeHandled = result.ok;
+        if (!result.ok) {
+          logVerbose(
+            `dispatch-from-config: route-reply (reset notice) failed: ${result.error ?? "unknown error"}`,
+          );
+        }
+      } else {
+        try {
+          await params.replyOptions?.onReplyStart?.();
+        } catch (err) {
+          logVerbose(`dispatch-from-config: onReplyStart (reset notice) failed: ${String(err)}`);
+        }
+        // Some adapters intentionally drop non-final payloads, so queue this as final.
+        // Then wait for the delivery chain so /new notices are actually sent before
+        // expensive reply resolution/model startup begins.
+        resetSessionNoticeHandled = dispatcher.sendFinalReply(resetNoticePayload);
+        if (resetSessionNoticeHandled) {
+          await dispatcher.waitForIdle();
+        }
+      }
+    }
+
     const fastAbort = await tryFastAbortFromMessage({ ctx, cfg });
     if (fastAbort.handled) {
       const payload = {
@@ -340,6 +377,8 @@ export async function dispatchReplyFromConfig(params: {
       ctx,
       {
         ...params.replyOptions,
+        resetSessionNoticeHandled:
+          resetSessionNoticeHandled || params.replyOptions?.resetSessionNoticeHandled === true,
         onToolResult: (payload: ReplyPayload) => {
           const run = async () => {
             const ttsPayload = await maybeApplyTtsToPayload({

@@ -13,7 +13,9 @@ import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
 import { listSkillCommandsForAgents } from "../auto-reply/skill-commands.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../channels/command-gating.js";
+import { logTypingFailure } from "../channels/logging.js";
 import { createReplyPrefixOptions } from "../channels/reply-prefix.js";
+import { createTypingCallbacks } from "../channels/typing.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ChannelGroupPolicy } from "../config/group-policy.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
@@ -52,6 +54,7 @@ import { TelegramBotOptions } from "./bot.js";
 import { deliverReplies } from "./bot/delivery.js";
 import {
   buildTelegramThreadParams,
+  buildTypingThreadParams,
   buildSenderName,
   buildTelegramGroupFrom,
   buildTelegramGroupPeerId,
@@ -629,6 +632,23 @@ export const registerTelegramNativeCommands = ({
             channel: "telegram",
             accountId: route.accountId,
           });
+          const typingCallbacks = createTypingCallbacks({
+            start: async () => {
+              await withTelegramApiErrorLogging({
+                operation: "sendChatAction",
+                fn: () =>
+                  bot.api.sendChatAction(chatId, "typing", buildTypingThreadParams(threadSpec.id)),
+              });
+            },
+            onStartError: (err) => {
+              logTypingFailure({
+                log: logVerbose,
+                channel: "telegram",
+                target: String(chatId),
+                error: err,
+              });
+            },
+          });
 
           await dispatchReplyWithBufferedBlockDispatcher({
             ctx: ctxPayload,
@@ -659,6 +679,9 @@ export const registerTelegramNativeCommands = ({
               onError: (err, info) => {
                 runtime.error?.(danger(`telegram slash ${info.kind} reply failed: ${String(err)}`));
               },
+              onReplyStart: typingCallbacks.onReplyStart,
+              onIdle: typingCallbacks.onIdle,
+              onCleanup: typingCallbacks.onCleanup,
             },
             replyOptions: {
               skillFilter,

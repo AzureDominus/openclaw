@@ -43,6 +43,7 @@ import type { createModelSelectionState } from "./model-selection.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveQueueSettings } from "./queue.js";
 import { routeReply } from "./route-reply.js";
+import { buildResetSessionNoticeText } from "./session-reset-notice.js";
 import { BARE_SESSION_RESET_PROMPT } from "./session-reset-prompt.js";
 import { ensureSkillSnapshot, prependSystemEvents } from "./session-updates.js";
 import { resolveTypingMode } from "./typing-mode.js";
@@ -52,17 +53,14 @@ import { appendUntrustedContext } from "./untrusted-context.js";
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 type ExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
 
-function buildResetSessionNoticeText(params: {
-  provider: string;
-  model: string;
-  defaultProvider: string;
-  defaultModel: string;
-}): string {
-  const modelLabel = `${params.provider}/${params.model}`;
-  const defaultLabel = `${params.defaultProvider}/${params.defaultModel}`;
-  return modelLabel === defaultLabel
-    ? `✅ New session started · model: ${modelLabel}`
-    : `✅ New session started · model: ${modelLabel} (default: ${defaultLabel})`;
+function prependReplyPayload(
+  payload: ReplyPayload,
+  reply: ReplyPayload | ReplyPayload[] | undefined,
+): ReplyPayload | ReplyPayload[] {
+  if (!reply) {
+    return payload;
+  }
+  return Array.isArray(reply) ? [payload, ...reply] : [payload, reply];
 }
 
 function resolveResetSessionNoticeRoute(params: {
@@ -92,26 +90,18 @@ async function sendResetSessionNotice(params: {
   cfg: OpenClawConfig;
   accountId: string | undefined;
   threadId: string | number | undefined;
-  provider: string;
-  model: string;
-  defaultProvider: string;
-  defaultModel: string;
-}): Promise<void> {
+  text: string;
+}): Promise<boolean> {
   const route = resolveResetSessionNoticeRoute({
     ctx: params.ctx,
     command: params.command,
   });
   if (!route) {
-    return;
+    return false;
   }
-  await routeReply({
+  const result = await routeReply({
     payload: {
-      text: buildResetSessionNoticeText({
-        provider: params.provider,
-        model: params.model,
-        defaultProvider: params.defaultProvider,
-        defaultModel: params.defaultModel,
-      }),
+      text: params.text,
     },
     channel: route.channel,
     to: route.to,
@@ -120,6 +110,13 @@ async function sendResetSessionNotice(params: {
     threadId: params.threadId,
     cfg: params.cfg,
   });
+  if (!result?.ok) {
+    logVerbose(
+      `reset notice route failed channel=${route.channel} to=${route.to}: ${result?.error ?? "unknown error"}`,
+    );
+    return false;
+  }
+  return true;
 }
 
 type RunPreparedReplyParams = {
@@ -296,6 +293,28 @@ export async function runPreparedReply(
   const hasMediaAttachment = Boolean(
     sessionCtx.MediaPath || (sessionCtx.MediaPaths && sessionCtx.MediaPaths.length > 0),
   );
+  const shouldSendResetNotice =
+    resetTriggered && command.isAuthorizedSender && !opts?.resetSessionNoticeHandled;
+  const resetNoticeText = shouldSendResetNotice
+    ? buildResetSessionNoticeText({
+        provider,
+        model,
+        defaultProvider,
+        defaultModel,
+      })
+    : undefined;
+  let resetNoticeDelivered = false;
+  if (resetNoticeText) {
+    resetNoticeDelivered = await sendResetSessionNotice({
+      ctx,
+      command,
+      sessionKey,
+      cfg,
+      accountId: ctx.AccountId,
+      threadId: ctx.MessageThreadId,
+      text: resetNoticeText,
+    });
+  }
   if (!baseBodyTrimmed && !hasMediaAttachment) {
     await typing.onReplyStart();
     logVerbose("Inbound body empty after normalization; skipping agent run");
@@ -387,20 +406,6 @@ export async function runPreparedReply(
         });
       }
     }
-  }
-  if (resetTriggered && command.isAuthorizedSender) {
-    await sendResetSessionNotice({
-      ctx,
-      command,
-      sessionKey,
-      cfg,
-      accountId: ctx.AccountId,
-      threadId: ctx.MessageThreadId,
-      provider,
-      model,
-      defaultProvider,
-      defaultModel,
-    });
   }
   const sessionIdFinal = sessionId ?? crypto.randomUUID();
   const sessionFile = resolveSessionFilePath(
@@ -500,7 +505,7 @@ export async function runPreparedReply(
     },
   };
 
-  return runReplyAgent({
+  const agentReply = await runReplyAgent({
     commandBody: prefixedCommandBody,
     followupRun,
     queueKey,
@@ -526,4 +531,11 @@ export async function runPreparedReply(
     shouldInjectGroupIntro,
     typingMode,
   });
+  if (!resetNoticeText) {
+    return agentReply;
+  }
+  if (!resetNoticeDelivered) {
+    return prependReplyPayload({ text: resetNoticeText }, agentReply);
+  }
+  return agentReply;
 }
