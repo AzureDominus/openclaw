@@ -46,6 +46,9 @@ export type ExecToolDetails =
       exitCode: number | null;
       durationMs: number;
       aggregated: string;
+      truncated?: boolean;
+      totalOutputChars?: number;
+      outputCapChars?: number;
       cwd?: string;
     }
   | {
