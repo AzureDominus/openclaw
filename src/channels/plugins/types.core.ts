@@ -641,7 +641,6 @@ export type ChannelMessageActionContext = {
   cfg: OpenClawConfig;
   params: Record<string, unknown>;
   mediaAccess?: OutboundMediaAccess;
-  mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
   accountId?: string | null;
   /**

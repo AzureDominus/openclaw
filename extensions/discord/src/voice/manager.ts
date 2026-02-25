@@ -688,7 +688,7 @@ export class DiscordVoiceManager {
     });
     const generation = beginVoiceCapture(entry.capture, userId, stream);
     let streamAborted = false;
-    stream.on("error", (err) => {
+    stream.on("error", (err: unknown) => {
       streamAborted = analyzeVoiceReceiveError(err).isAbortLike;
       this.handleReceiveError(entry, err);
     });

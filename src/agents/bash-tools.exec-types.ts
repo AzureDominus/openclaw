@@ -57,6 +57,9 @@ export type ExecToolDetails =
       durationMs: number;
       aggregated: string;
       timedOut?: boolean;
+      truncated?: boolean;
+      totalOutputChars?: number;
+      outputCapChars?: number;
       cwd?: string;
     }
   | {
