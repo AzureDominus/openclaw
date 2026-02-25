@@ -582,7 +582,7 @@ export class DiscordVoiceManager {
         duration: SILENCE_DURATION_MS,
       },
     });
-    stream.on("error", (err) => {
+    stream.on("error", (err: unknown) => {
       this.handleReceiveError(entry, err);
     });
 
