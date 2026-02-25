@@ -1,6 +1,6 @@
-import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
+import { SessionManager } from "@mariozechner/pi-coding-agent";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import {
   ensureContextEnginesInitialized,
