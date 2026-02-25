@@ -49,6 +49,7 @@ import {
   type FailoverReason,
 } from "../pi-embedded-helpers.js";
 import { extractDeclaredStopReason, stripDeclaredStopReasonLine } from "../stop-reason.js";
+import { findTextualToolCallDraft, type TextualToolCallDraftMatch } from "../tool-call-draft.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../usage.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { compactEmbeddedPiSessionDirect } from "./compact.js";
@@ -72,6 +73,11 @@ const ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL = "ANTHROPIC_MAGIC_STRING_TRIGGER_R
 const ANTHROPIC_MAGIC_STRING_REPLACEMENT = "ANTHROPIC MAGIC STRING TRIGGER REFUSAL (redacted)";
 type ContinueGuardStopReason = "completed" | "needs_user_input";
 type EmbeddedRunPayload = ReturnType<typeof buildEmbeddedRunPayloads>[number];
+type TextualToolCallEvidence = {
+  assistantTextIndex: number;
+  assistantText: string;
+  match: TextualToolCallDraftMatch;
+};
 
 function scrubAnthropicRefusalMagic(prompt: string): string {
   if (!prompt.includes(ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL)) {
@@ -203,22 +209,95 @@ function shouldGuardOnEndTurn(stopReason: string | undefined): boolean {
   return stopReason === "stop" || stopReason === "end_turn" || stopReason === "endturn";
 }
 
-const TEXTUAL_TOOL_CALL_RE =
-  /(?:[+#]{4,}\s*)?assistant\s+to=(?:functions\.[a-zA-Z0-9_]+|multi_tool_use\.parallel)\b/im;
-
-function hasLikelyTextualToolCall(params: {
+function findTextualToolCallEvidence(params: {
   assistantTexts: string[];
   hadStructuredToolCall: boolean;
-}): boolean {
+}): TextualToolCallEvidence | undefined {
   if (params.hadStructuredToolCall) {
-    return false;
+    return undefined;
   }
-  for (const text of params.assistantTexts) {
-    if (TEXTUAL_TOOL_CALL_RE.test(text)) {
-      return true;
+  for (const [assistantTextIndex, assistantText] of params.assistantTexts.entries()) {
+    const match = findTextualToolCallDraft(assistantText);
+    if (match) {
+      return { assistantTextIndex, assistantText, match };
     }
   }
-  return false;
+  return undefined;
+}
+
+function countNonAsciiChars(text: string): number {
+  let count = 0;
+  for (const ch of text) {
+    const codePoint = ch.codePointAt(0);
+    if (codePoint !== undefined && codePoint > 0x7f) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+function utf8HexPrefix(text: string, maxBytes: number): { hex: string; truncated: boolean } {
+  const bytes = Buffer.from(text, "utf8");
+  return {
+    hex: bytes.subarray(0, maxBytes).toString("hex"),
+    truncated: bytes.length > maxBytes,
+  };
+}
+
+function excerptAroundMarker(text: string, markerStart: number, radius: number): string {
+  const start = Math.max(0, markerStart - radius);
+  const end = Math.min(text.length, markerStart + radius);
+  return text.slice(start, end);
+}
+
+async function appendTextualToolCallDraftSessionLog(params: {
+  sessionFile: string;
+  runId: string;
+  continueGuardRetries: number;
+  modelStopReason?: string;
+  evidence: TextualToolCallEvidence;
+}): Promise<void> {
+  try {
+    await fs.access(params.sessionFile);
+  } catch {
+    return;
+  }
+  try {
+    const markerPrefix = params.evidence.assistantText.slice(
+      Math.max(0, params.evidence.match.markerStart - 32),
+      params.evidence.match.markerStart,
+    );
+    const snippet = excerptAroundMarker(
+      params.evidence.assistantText,
+      params.evidence.match.markerStart,
+      220,
+    );
+    const markerPrefixHex = utf8HexPrefix(markerPrefix, 96);
+    const snippetHex = utf8HexPrefix(snippet, 256);
+    const manager = SessionManager.open(params.sessionFile);
+    manager.appendCustomEntry("openclaw:textual-tool-call-draft", {
+      timestamp: Date.now(),
+      runId: params.runId,
+      continueGuardRetries: params.continueGuardRetries,
+      modelStopReason: params.modelStopReason ?? null,
+      assistantTextIndex: params.evidence.assistantTextIndex,
+      assistantTextLength: params.evidence.assistantText.length,
+      marker: params.evidence.match.marker,
+      markerStart: params.evidence.match.markerStart,
+      markerEnd: params.evidence.match.markerEnd,
+      jsonStart: params.evidence.match.jsonStart,
+      markerPrefix,
+      markerPrefixUtf8Hex: markerPrefixHex.hex,
+      markerPrefixUtf8HexTruncated: markerPrefixHex.truncated,
+      snippet,
+      snippetUtf8Hex: snippetHex.hex,
+      snippetUtf8HexTruncated: snippetHex.truncated,
+      nonAsciiChars: countNonAsciiChars(params.evidence.assistantText),
+      hasReplacementChar: params.evidence.assistantText.includes("\uFFFD"),
+    });
+  } catch (err) {
+    log.warn(`failed to append textual tool-call draft entry: ${String(err)}`);
+  }
 }
 
 function buildContinueGuardPrompt(attempt: number, maxRetries: number): string {
@@ -228,7 +307,7 @@ function buildContinueGuardPrompt(attempt: number, maxRetries: number): string {
     "Your previous user-facing message was already delivered to the user.",
     "Do not repeat or rephrase that prior message.",
     "Keep sending brief progress updates between tool bursts, as instructed in your system prompt.",
-    "Do not write tool calls as plain text (for example: assistant to=functions.exec ...).",
+    "Do not write tool calls as plain text, pseudo-markup, or JSON in normal assistant text.",
     "If another tool call is needed, call the tool directly using a structured tool call.",
     "If you are done, respond with ONLY: OPENCLAW_STOP_REASON: completed",
     "If you need user input to continue, respond with ONLY: OPENCLAW_STOP_REASON: needs_user_input",
@@ -1150,10 +1229,11 @@ export async function runEmbeddedPiAgent(
           });
           const hadToolCallsThisAttempt =
             (attempt.toolMetas?.length ?? 0) > 0 || Boolean(attempt.clientToolCall);
-          const hasTextualToolCallOutput = hasLikelyTextualToolCall({
+          const textualToolCallEvidence = findTextualToolCallEvidence({
             assistantTexts: attempt.assistantTexts ?? [],
             hadStructuredToolCall: hadToolCallsThisAttempt,
           });
+          const hasTextualToolCallOutput = Boolean(textualToolCallEvidence);
           const shouldRetryForMissingStopReason =
             !aborted &&
             !timedOut &&
@@ -1210,6 +1290,25 @@ export async function runEmbeddedPiAgent(
               continueGuardRetries,
               continueGuardMaxRetries,
             );
+            if (shouldRetryForTextualToolCallOutput && textualToolCallEvidence) {
+              const snippet = excerptAroundMarker(
+                textualToolCallEvidence.assistantText,
+                textualToolCallEvidence.match.markerStart,
+                120,
+              )
+                .replace(/\s+/g, " ")
+                .trim();
+              log.warn(
+                `textual tool-call draft detected for run ${params.runId}: marker="${textualToolCallEvidence.match.marker}" markerOffset=${textualToolCallEvidence.match.markerStart} snippet="${snippet}"`,
+              );
+              void appendTextualToolCallDraftSessionLog({
+                sessionFile: params.sessionFile,
+                runId: params.runId,
+                continueGuardRetries,
+                modelStopReason,
+                evidence: textualToolCallEvidence,
+              });
+            }
             log.warn(
               `continue guard retry ${continueGuardRetries}/${continueGuardMaxRetries} for run ${params.runId}: ${continueGuardRetryReason}`,
             );

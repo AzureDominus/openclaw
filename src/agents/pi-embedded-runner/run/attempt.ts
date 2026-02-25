@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import os from "node:os";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
@@ -7,9 +9,6 @@ import {
   SessionManager,
   SettingsManager,
 } from "@mariozechner/pi-coding-agent";
-import fs from "node:fs/promises";
-import os from "node:os";
-import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../../config/config.js";
@@ -45,6 +44,7 @@ import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { resolveDefaultModelForAgent } from "../../model-selection.js";
 import { createOllamaStreamFn, OLLAMA_NATIVE_BASE_URL } from "../../ollama-stream.js";
+import { createOpenAICodexSseCapture } from "../../openai-codex-sse-capture.js";
 import { resolveOwnerDisplaySetting } from "../../owner-display.js";
 import {
   isCloudCodeAssistFormatError,
@@ -115,6 +115,7 @@ import {
   shouldFlagCompactionTimeout,
 } from "./compaction-timeout.js";
 import { detectAndLoadPromptImages } from "./images.js";
+import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
 type PromptBuildHookRunner = {
   hasHooks: (hookName: "before_prompt_build" | "before_agent_start") => boolean;
@@ -734,6 +735,16 @@ export async function runEmbeddedAttempt(
         modelApi: params.model.api,
         workspaceDir: params.workspaceDir,
       });
+      const codexSseCapture = createOpenAICodexSseCapture({
+        env: process.env,
+        runId: params.runId,
+        sessionId: activeSession.sessionId,
+        sessionKey: params.sessionKey,
+        provider: params.provider,
+        modelId: params.modelId,
+        modelApi: params.model.api,
+        workspaceDir: params.workspaceDir,
+      });
 
       // Ollama native API: bypass SDK's streamSimple and use direct /api/chat calls
       // for reliable streaming + tool calling support (#11828).
@@ -823,6 +834,9 @@ export async function runEmbeddedAttempt(
         activeSession.agent.streamFn = anthropicPayloadLogger.wrapStreamFn(
           activeSession.agent.streamFn,
         );
+      }
+      if (codexSseCapture) {
+        activeSession.agent.streamFn = codexSseCapture.wrapStreamFn(activeSession.agent.streamFn);
       }
 
       try {

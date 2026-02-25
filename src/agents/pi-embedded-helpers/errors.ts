@@ -1,9 +1,10 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import type { FailoverReason } from "./types.js";
 import { formatSandboxToolPolicyBlockedMessage } from "../sandbox.js";
 import { stableStringify } from "../stable-stringify.js";
+import { stripTextualToolCallDraftFromText } from "../tool-call-draft.js";
+import type { FailoverReason } from "./types.js";
 
 const log = createSubsystemLogger("errors");
 
@@ -155,9 +156,6 @@ export function isCompactionFailureError(errorMessage?: string): boolean {
 const ERROR_PAYLOAD_PREFIX_RE =
   /^(?:error|api\s*error|apierror|openai\s*error|anthropic\s*error|gateway\s*error)[:\s-]+/i;
 const FINAL_TAG_RE = /<\s*\/?\s*final\s*>/gi;
-const FAILED_TOOL_CALL_DRAFT_MARKER_RE =
-  /(?:\+#[+#]{2,}\s*)assistant\s+to=(?:functions\.[a-zA-Z0-9_]+|multi_tool_use\.parallel)\b/i;
-const FAILED_TOOL_CALL_DRAFT_JSON_AFTER_RE = /(?:^|[\r\n])\s*(?:```(?:json)?\s*[\r\n])?\s*[{[]/im;
 const ERROR_PREFIX_RE =
   /^(?:error|api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|request failed|failed|exception)[:\s-]+/i;
 const CONTEXT_OVERFLOW_ERROR_HEAD_RE =
@@ -241,23 +239,7 @@ function stripFinalTagsFromText(text: string): string {
 }
 
 function stripFailedToolCallDraftFromText(text: string): string {
-  if (!text || !FAILED_TOOL_CALL_DRAFT_MARKER_RE.test(text)) {
-    return text;
-  }
-  const marker = FAILED_TOOL_CALL_DRAFT_MARKER_RE.exec(text);
-  if (!marker || marker.index == null) {
-    return text;
-  }
-  const markerStart = marker.index;
-  const markerEnd = markerStart + marker[0].length;
-  const afterMarker = text.slice(markerEnd);
-  if (!FAILED_TOOL_CALL_DRAFT_JSON_AFTER_RE.test(afterMarker)) {
-    return text;
-  }
-  return text
-    .slice(0, markerStart)
-    .replace(/[ \t]+\r?\n/g, "\n")
-    .trimEnd();
+  return stripTextualToolCallDraftFromText(text);
 }
 
 function collapseConsecutiveDuplicateBlocks(text: string): string {

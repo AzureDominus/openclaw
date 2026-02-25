@@ -30,6 +30,15 @@ describe("sanitizeUserFacingText", () => {
     );
   });
 
+  it("strips leaked tool-call drafts without +#+ prefix when multilingual noise appears before json", () => {
+    const leaked =
+      "Quick correction: `~/openclaw` doesn’t exist, so I’m locating the actual repo path now. assistant to=functions.exec մեկնաբանություն  彩神争露大发快三json\n" +
+      '{"command":"ls -la /home/timmy/repos/openclaw","workdir":"/home/timmy"}';
+    expect(sanitizeUserFacingText(leaked)).toBe(
+      "Quick correction: `~/openclaw` doesn’t exist, so I’m locating the actual repo path now.",
+    );
+  });
+
   it("does not strip plain-text mentions when no tool-call JSON draft follows", () => {
     const text = "Debug note: assistant to=functions.browser appears in this doc string.";
     expect(sanitizeUserFacingText(text)).toBe(text);

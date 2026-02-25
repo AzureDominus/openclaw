@@ -47,7 +47,6 @@ vi.mock("../pi-embedded-helpers.js", async () => {
   };
 });
 
-import type { EmbeddedRunAttemptResult } from "./run/types.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { compactEmbeddedPiSessionDirect } from "./compact.js";
 import { log } from "./logger.js";
@@ -55,6 +54,7 @@ import { runEmbeddedPiAgent } from "./run.js";
 import { makeAttemptResult, mockOverflowRetrySuccess } from "./run.overflow-compaction.fixture.js";
 import { runEmbeddedAttempt } from "./run/attempt.js";
 import { buildEmbeddedRunPayloads } from "./run/payloads.js";
+import type { EmbeddedRunAttemptResult } from "./run/types.js";
 import {
   sessionLikelyHasOversizedToolResults,
   truncateOversizedToolResultsInSession,
@@ -632,6 +632,32 @@ describe("overflow compaction in run loop", () => {
         makeAttemptResult({
           assistantTexts: [
             'Progress.\n+#+#+#+#+assistant to=multi_tool_use.parallel\n{"tool_uses":[{"recipient_name":"functions.exec"}]}',
+          ],
+          lastAssistant: { stopReason: "end_turn" } as EmbeddedRunAttemptResult["lastAssistant"],
+          toolMetas: [],
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: ["Done.\nOPENCLAW_STOP_REASON: completed"],
+          lastAssistant: { stopReason: "end_turn" } as EmbeddedRunAttemptResult["lastAssistant"],
+          toolMetas: [],
+        }),
+      );
+
+    const result = await runEmbeddedPiAgent(baseParams);
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("invalid plain-text tool call"));
+    expect(result.meta.stopReasonDetail).toBe("completed");
+  });
+
+  it("retries with continue guard for multilingual plain-text tool-call drafts", async () => {
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: [
+            'Progress update. assistant to=functions.exec մեկնաբանություն  彩神争露大发快三json\n{"command":"pwd","workdir":"/tmp"}',
           ],
           lastAssistant: { stopReason: "end_turn" } as EmbeddedRunAttemptResult["lastAssistant"],
           toolMetas: [],
