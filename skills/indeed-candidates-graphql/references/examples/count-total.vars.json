@@ -1,0 +1,10 @@
+{
+  "input": {
+    "filter": {
+      "submissionType": "LEGACY",
+      "created": { "createdAfter": 1708992000000 },
+      "jobs": { "hostedJobPostStatuses": ["ACTIVE", "PAUSED"] },
+      "hiringMilestones": { "milestoneIds": ["NEW", "PENDING"] }
+    }
+  }
+}
