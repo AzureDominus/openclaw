@@ -1,0 +1,6 @@
+query CandidateListTotalCount($input: FindCandidateSubmissionsInput!, $first: Int) {
+  findCandidateSubmissions(input: $input, first: $first) {
+    totalCount
+    __typename
+  }
+}
