@@ -652,7 +652,7 @@ export const registerTelegramNativeCommands = ({
                 }
               },
               onSkip: (_payload, info) => {
-                if (info.reason !== "silent") {
+                if (info.reason !== "silent" && info.reason !== "heartbeat") {
                   deliveryState.skippedNonSilent += 1;
                 }
               },

@@ -1,8 +1,11 @@
-import type { ReplyPayload } from "../types.js";
 import { sanitizeUserFacingText } from "../../agents/pi-embedded-helpers.js";
-import { stripDeclaredStopReasonLine } from "../../agents/stop-reason.js";
+import {
+  extractDeclaredStopReasonFromText,
+  stripDeclaredStopReasonLine,
+} from "../../agents/stop-reason.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import { HEARTBEAT_TOKEN, isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
+import type { ReplyPayload } from "../types.js";
 import { hasLineDirectives, parseLineDirectives } from "./line-directives.js";
 import {
   resolveResponsePrefixTemplate,
@@ -67,7 +70,12 @@ export function normalizeReplyPayload(
   }
 
   if (text && opts.stripStopReasonMarker) {
+    const hasDeclaredStopReason = Boolean(extractDeclaredStopReasonFromText(text));
     text = stripDeclaredStopReasonLine(text);
+    if (hasDeclaredStopReason && !text.trim() && !hasMedia && !hasChannelData) {
+      opts.onSkip?.("silent");
+      return null;
+    }
   }
 
   if (text) {

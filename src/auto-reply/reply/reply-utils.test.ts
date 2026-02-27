@@ -98,10 +98,17 @@ describe("normalizeReplyPayload", () => {
     const cases = [
       { name: "silent", payload: { text: SILENT_REPLY_TOKEN }, reason: "silent" },
       { name: "empty", payload: { text: "   " }, reason: "empty" },
+      {
+        name: "stop-reason-only",
+        payload: { text: "OPENCLAW_STOP_REASON: completed" },
+        reason: "silent",
+        options: { stripStopReasonMarker: true },
+      },
     ] as const;
     for (const testCase of cases) {
       const reasons: string[] = [];
       const normalized = normalizeReplyPayload(testCase.payload, {
+        ...testCase.options,
         onSkip: (reason) => reasons.push(reason),
       });
       expect(normalized, testCase.name).toBeNull();
