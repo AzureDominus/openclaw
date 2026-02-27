@@ -140,62 +140,6 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
-  it("sends reset notice immediately as final reply before reply resolution", async () => {
-    setNoAbort();
-    mocks.routeReply.mockClear();
-    const cfg = emptyConfig;
-    const dispatcher = createDispatcher();
-    const onReplyStart = vi.fn(async () => {});
-    const sendFinalReplyMock = dispatcher.sendFinalReply as ReturnType<typeof vi.fn>;
-    const waitForIdleMock = dispatcher.waitForIdle as ReturnType<typeof vi.fn>;
-    const ctx = buildTestCtx({
-      Provider: "whatsapp",
-      Surface: "whatsapp",
-      OriginatingChannel: "whatsapp",
-      OriginatingTo: "+15550001111",
-      Body: "/new",
-      RawBody: "/new",
-      CommandBody: "/new",
-      BodyForCommands: "/new",
-      CommandAuthorized: true,
-    });
-
-    const replyResolver = vi.fn(
-      async (_ctx: MsgContext, opts?: GetReplyOptions, _cfg?: OpenClawConfig) => {
-        expect(sendFinalReplyMock.mock.calls.length).toBe(1);
-        expect(waitForIdleMock.mock.calls.length).toBe(1);
-        expect(opts?.resetSessionNoticeHandled).toBe(true);
-        return { text: "hi" } satisfies ReplyPayload;
-      },
-    );
-
-    await dispatchReplyFromConfig({
-      ctx,
-      cfg,
-      dispatcher,
-      replyResolver,
-      replyOptions: { onReplyStart },
-    });
-
-    expect(mocks.routeReply).not.toHaveBeenCalled();
-    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
-    expect(onReplyStart).toHaveBeenCalledTimes(1);
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(2);
-    expect(dispatcher.waitForIdle).toHaveBeenCalledTimes(1);
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: expect.stringContaining("✅ New session started · model:"),
-      }),
-    );
-    const onReplyStartOrder = onReplyStart.mock.invocationCallOrder[0];
-    const firstNoticeSendOrder = sendFinalReplyMock.mock.invocationCallOrder[0];
-    const waitForIdleOrder = waitForIdleMock.mock.invocationCallOrder[0];
-    const replyResolverOrder = replyResolver.mock.invocationCallOrder[0];
-    expect(onReplyStartOrder).toBeLessThan(firstNoticeSendOrder);
-    expect(firstNoticeSendOrder).toBeLessThan(waitForIdleOrder);
-    expect(waitForIdleOrder).toBeLessThan(replyResolverOrder);
-  });
-
   it("routes when OriginatingChannel differs from Provider", async () => {
     setNoAbort();
     mocks.routeReply.mockClear();

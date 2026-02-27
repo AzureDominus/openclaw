@@ -64,19 +64,14 @@ function buildStatusCommandContext() {
   };
 }
 
-function registerAndResolveStatusHandler(cfg: OpenClawConfig): {
-  handler: TelegramCommandHandler;
-  sendChatAction: ReturnType<typeof vi.fn>;
-} {
+function registerAndResolveStatusHandler(cfg: OpenClawConfig): TelegramCommandHandler {
   const commandHandlers = new Map<string, TelegramCommandHandler>();
-  const sendChatAction = vi.fn().mockResolvedValue(undefined);
   registerTelegramNativeCommands({
     ...createNativeCommandTestParams({
       bot: {
         api: {
           setMyCommands: vi.fn().mockResolvedValue(undefined),
           sendMessage: vi.fn().mockResolvedValue(undefined),
-          sendChatAction,
         },
         command: vi.fn((name: string, cb: TelegramCommandHandler) => {
           commandHandlers.set(name, cb);
@@ -89,7 +84,7 @@ function registerAndResolveStatusHandler(cfg: OpenClawConfig): {
 
   const handler = commandHandlers.get("status");
   expect(handler).toBeTruthy();
-  return { handler: handler as TelegramCommandHandler, sendChatAction };
+  return handler as TelegramCommandHandler;
 }
 
 describe("registerTelegramNativeCommands — session metadata", () => {
@@ -101,7 +96,7 @@ describe("registerTelegramNativeCommands — session metadata", () => {
 
   it("calls recordSessionMetaFromInbound after a native slash command", async () => {
     const cfg: OpenClawConfig = {};
-    const { handler } = registerAndResolveStatusHandler(cfg);
+    const handler = registerAndResolveStatusHandler(cfg);
     await handler(buildStatusCommandContext());
 
     expect(sessionMocks.recordSessionMetaFromInbound).toHaveBeenCalledTimes(1);
@@ -120,7 +115,7 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     sessionMocks.recordSessionMetaFromInbound.mockReturnValue(deferred.promise);
 
     const cfg: OpenClawConfig = {};
-    const { handler } = registerAndResolveStatusHandler(cfg);
+    const handler = registerAndResolveStatusHandler(cfg);
     const runPromise = handler(buildStatusCommandContext());
 
     await vi.waitFor(() => {
@@ -132,25 +127,5 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     await runPromise;
 
     expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
-  });
-
-  it("wires native slash dispatch typing callbacks", async () => {
-    replyMocks.dispatchReplyWithBufferedBlockDispatcher.mockImplementationOnce(
-      async (params: {
-        dispatcherOptions?: {
-          onReplyStart?: () => Promise<void> | void;
-          onIdle?: () => void;
-        };
-      }) => {
-        await params.dispatcherOptions?.onReplyStart?.();
-        params.dispatcherOptions?.onIdle?.();
-        return undefined;
-      },
-    );
-    const cfg: OpenClawConfig = {};
-    const { handler, sendChatAction } = registerAndResolveStatusHandler(cfg);
-    await handler(buildStatusCommandContext());
-
-    expect(sendChatAction).toHaveBeenCalledWith(100, "typing", undefined);
   });
 });

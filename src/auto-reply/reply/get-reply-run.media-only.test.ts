@@ -28,13 +28,9 @@ vi.mock("../../process/command-queue.js", () => ({
   getQueueSize: vi.fn().mockReturnValue(0),
 }));
 
-vi.mock("../../routing/session-key.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../routing/session-key.js")>();
-  return {
-    ...actual,
-    normalizeMainKey: vi.fn().mockReturnValue("main"),
-  };
-});
+vi.mock("../../routing/session-key.js", () => ({
+  normalizeMainKey: vi.fn().mockReturnValue("main"),
+}));
 
 vi.mock("../../utils/provider-utils.js", () => ({
   isReasoningTagProvider: vi.fn().mockReturnValue(false),
@@ -85,6 +81,7 @@ vi.mock("./typing-mode.js", () => ({
 
 import { runReplyAgent } from "./agent-runner.js";
 import { routeReply } from "./route-reply.js";
+import { resolveTypingMode } from "./typing-mode.js";
 
 function baseParams(
   overrides: Partial<Parameters<typeof runPreparedReply>[0]> = {},
@@ -161,7 +158,6 @@ function baseParams(
 describe("runPreparedReply media-only handling", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(routeReply).mockResolvedValue({ ok: true });
   });
 
   it("allows media-only prompts and preserves thread context in queued followups", async () => {
@@ -227,37 +223,6 @@ describe("runPreparedReply media-only handling", () => {
     expect(resetNoticeCall?.payload?.text).not.toContain("env:");
   });
 
-  it("sends reset notice immediately before agent run on non-WhatsApp channels", async () => {
-    await runPreparedReply(
-      baseParams({
-        resetTriggered: true,
-        ctx: {
-          Body: "/new",
-          RawBody: "/new",
-          CommandBody: "/new",
-          OriginatingChannel: "telegram",
-          OriginatingTo: "12345",
-          ChatType: "direct",
-        },
-        sessionCtx: {
-          Body: "/new",
-          BodyStripped: "/new",
-          Provider: "telegram",
-          ChatType: "direct",
-          OriginatingChannel: "telegram",
-          OriginatingTo: "12345",
-        },
-      }),
-    );
-
-    expect(vi.mocked(routeReply)).toHaveBeenCalledTimes(1);
-    const routeOrder = vi.mocked(routeReply).mock.invocationCallOrder[0] ?? 0;
-    const runOrder = vi.mocked(runReplyAgent).mock.invocationCallOrder[0] ?? 0;
-    expect(routeOrder).toBeGreaterThan(0);
-    expect(runOrder).toBeGreaterThan(0);
-    expect(routeOrder).toBeLessThan(runOrder);
-  });
-
   it("skips reset notice when only webchat fallback routing is available", async () => {
     await runPreparedReply(
       baseParams({
@@ -286,70 +251,47 @@ describe("runPreparedReply media-only handling", () => {
     expect(vi.mocked(routeReply)).not.toHaveBeenCalled();
   });
 
-  it("sends reset notice immediately for WhatsApp", async () => {
-    const result = await runPreparedReply(
+  it("uses inbound origin channel for run messageProvider", async () => {
+    await runPreparedReply(
       baseParams({
-        resetTriggered: true,
         ctx: {
-          Body: "/new",
-          RawBody: "/new",
-          CommandBody: "/new",
-          OriginatingChannel: "whatsapp",
-          OriginatingTo: "+15550001111",
-          ChatType: "direct",
+          Body: "",
+          RawBody: "",
+          CommandBody: "",
+          ThreadHistoryBody: "Earlier message in this thread",
+          OriginatingChannel: "webchat",
+          OriginatingTo: "session:abc",
+          ChatType: "group",
         },
         sessionCtx: {
-          Body: "/new",
-          BodyStripped: "/new",
-          Provider: "whatsapp",
-          ChatType: "direct",
-          OriginatingChannel: "whatsapp",
-          OriginatingTo: "+15550001111",
+          Body: "",
+          BodyStripped: "",
+          ThreadHistoryBody: "Earlier message in this thread",
+          MediaPath: "/tmp/input.png",
+          Provider: "telegram",
+          ChatType: "group",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "telegram:123",
         },
       }),
     );
 
-    expect(vi.mocked(routeReply)).toHaveBeenCalledTimes(1);
-    const resetNoticeCall = vi.mocked(routeReply).mock.calls[0]?.[0] as
-      | {
-          channel?: string;
-          to?: string;
-          payload?: { text?: string };
-        }
-      | undefined;
-    expect(resetNoticeCall?.channel).toBe("whatsapp");
-    expect(resetNoticeCall?.to).toBe("+15550001111");
-    expect(resetNoticeCall?.payload?.text).toContain("✅ New session started · model:");
-    expect(result).toEqual({ text: "ok" });
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call?.followupRun.run.messageProvider).toBe("webchat");
   });
 
-  it("falls back to queued reset notice when side-route delivery fails", async () => {
-    vi.mocked(routeReply).mockResolvedValue({ ok: false, error: "unavailable" });
-
-    const result = await runPreparedReply(
+  it("passes suppressTyping through typing mode resolution", async () => {
+    await runPreparedReply(
       baseParams({
-        resetTriggered: true,
-      }),
-    );
-
-    expect(vi.mocked(routeReply)).toHaveBeenCalledTimes(1);
-    expect(Array.isArray(result)).toBe(true);
-    const replies = result as Array<{ text?: string }>;
-    expect(replies[0]?.text).toContain("✅ New session started · model:");
-    expect(replies[1]).toEqual({ text: "ok" });
-  });
-
-  it("does not resend reset notice when already handled upstream", async () => {
-    const result = await runPreparedReply(
-      baseParams({
-        resetTriggered: true,
         opts: {
-          resetSessionNoticeHandled: true,
+          suppressTyping: true,
         },
       }),
     );
 
-    expect(vi.mocked(routeReply)).not.toHaveBeenCalled();
-    expect(result).toEqual({ text: "ok" });
+    const call = vi.mocked(resolveTypingMode).mock.calls[0]?.[0] as
+      | { suppressTyping?: boolean }
+      | undefined;
+    expect(call?.suppressTyping).toBe(true);
   });
 });

@@ -11,6 +11,7 @@ import {
 } from "../../logging/diagnostic.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { maybeApplyTtsToPayload, normalizeTtsAutoMode, resolveTtsConfig } from "../../tts/tts.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { getReplyFromConfig } from "../reply.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -19,7 +20,7 @@ import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { shouldSuppressReasoningPayload } from "./reply-payloads.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
-import { resolveImmediateResetSessionNoticeText } from "./session-reset-notice.js";
+import { resolveRunTypingPolicy } from "./typing-policy.js";
 
 const AUDIO_PLACEHOLDER_RE = /^<media:audio>(\s*\([^)]*\))?$/i;
 const AUDIO_HEADER_RE = /^\[Audio\b/i;
@@ -238,8 +239,11 @@ export async function dispatchReplyFromConfig(params: {
   const originatingChannel = ctx.OriginatingChannel;
   const originatingTo = ctx.OriginatingTo;
   const currentSurface = (ctx.Surface ?? ctx.Provider)?.toLowerCase();
-  const shouldRouteToOriginating =
-    isRoutableChannel(originatingChannel) && originatingTo && originatingChannel !== currentSurface;
+  const shouldRouteToOriginating = Boolean(
+    isRoutableChannel(originatingChannel) && originatingTo && originatingChannel !== currentSurface,
+  );
+  const shouldSuppressTyping =
+    shouldRouteToOriginating || originatingChannel === INTERNAL_MESSAGE_CHANNEL;
   const ttsChannel = shouldRouteToOriginating ? originatingChannel : currentSurface;
 
   /**
@@ -280,42 +284,6 @@ export async function dispatchReplyFromConfig(params: {
   markProcessing();
 
   try {
-    const immediateResetNoticeText = resolveImmediateResetSessionNoticeText({ ctx, cfg });
-    let resetSessionNoticeHandled = false;
-    if (immediateResetNoticeText) {
-      const resetNoticePayload: ReplyPayload = { text: immediateResetNoticeText };
-      if (shouldRouteToOriginating && originatingChannel && originatingTo) {
-        const result = await routeReply({
-          payload: resetNoticePayload,
-          channel: originatingChannel,
-          to: originatingTo,
-          sessionKey: ctx.SessionKey,
-          accountId: ctx.AccountId,
-          threadId: ctx.MessageThreadId,
-          cfg,
-        });
-        resetSessionNoticeHandled = result.ok;
-        if (!result.ok) {
-          logVerbose(
-            `dispatch-from-config: route-reply (reset notice) failed: ${result.error ?? "unknown error"}`,
-          );
-        }
-      } else {
-        try {
-          await params.replyOptions?.onReplyStart?.();
-        } catch (err) {
-          logVerbose(`dispatch-from-config: onReplyStart (reset notice) failed: ${String(err)}`);
-        }
-        // Some adapters intentionally drop non-final payloads, so queue this as final.
-        // Then wait for the delivery chain so /new notices are actually sent before
-        // expensive reply resolution/model startup begins.
-        resetSessionNoticeHandled = dispatcher.sendFinalReply(resetNoticePayload);
-        if (resetSessionNoticeHandled) {
-          await dispatcher.waitForIdle();
-        }
-      }
-    }
-
     const fastAbort = await tryFastAbortFromMessage({ ctx, cfg });
     if (fastAbort.handled) {
       const payload = {
@@ -372,13 +340,19 @@ export async function dispatchReplyFromConfig(params: {
       }
       return { ...payload, text: undefined };
     };
+    const typing = resolveRunTypingPolicy({
+      requestedPolicy: params.replyOptions?.typingPolicy,
+      suppressTyping: params.replyOptions?.suppressTyping === true || shouldSuppressTyping,
+      originatingChannel,
+      systemEvent: shouldRouteToOriginating,
+    });
 
     const replyResult = await (params.replyResolver ?? getReplyFromConfig)(
       ctx,
       {
         ...params.replyOptions,
-        resetSessionNoticeHandled:
-          resetSessionNoticeHandled || params.replyOptions?.resetSessionNoticeHandled === true,
+        typingPolicy: typing.typingPolicy,
+        suppressTyping: typing.suppressTyping,
         onToolResult: (payload: ReplyPayload) => {
           const run = async () => {
             const ttsPayload = await maybeApplyTtsToPayload({

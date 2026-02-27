@@ -43,24 +43,27 @@ import type { createModelSelectionState } from "./model-selection.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveQueueSettings } from "./queue.js";
 import { routeReply } from "./route-reply.js";
-import { buildResetSessionNoticeText } from "./session-reset-notice.js";
 import { BARE_SESSION_RESET_PROMPT } from "./session-reset-prompt.js";
 import { ensureSkillSnapshot, prependSystemEvents } from "./session-updates.js";
 import { resolveTypingMode } from "./typing-mode.js";
+import { resolveRunTypingPolicy } from "./typing-policy.js";
 import type { TypingController } from "./typing.js";
 import { appendUntrustedContext } from "./untrusted-context.js";
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 type ExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
 
-function prependReplyPayload(
-  payload: ReplyPayload,
-  reply: ReplyPayload | ReplyPayload[] | undefined,
-): ReplyPayload | ReplyPayload[] {
-  if (!reply) {
-    return payload;
-  }
-  return Array.isArray(reply) ? [payload, ...reply] : [payload, reply];
+function buildResetSessionNoticeText(params: {
+  provider: string;
+  model: string;
+  defaultProvider: string;
+  defaultModel: string;
+}): string {
+  const modelLabel = `${params.provider}/${params.model}`;
+  const defaultLabel = `${params.defaultProvider}/${params.defaultModel}`;
+  return modelLabel === defaultLabel
+    ? `✅ New session started · model: ${modelLabel}`
+    : `✅ New session started · model: ${modelLabel} (default: ${defaultLabel})`;
 }
 
 function resolveResetSessionNoticeRoute(params: {
@@ -90,18 +93,26 @@ async function sendResetSessionNotice(params: {
   cfg: OpenClawConfig;
   accountId: string | undefined;
   threadId: string | number | undefined;
-  text: string;
-}): Promise<boolean> {
+  provider: string;
+  model: string;
+  defaultProvider: string;
+  defaultModel: string;
+}): Promise<void> {
   const route = resolveResetSessionNoticeRoute({
     ctx: params.ctx,
     command: params.command,
   });
   if (!route) {
-    return false;
+    return;
   }
-  const result = await routeReply({
+  await routeReply({
     payload: {
-      text: params.text,
+      text: buildResetSessionNoticeText({
+        provider: params.provider,
+        model: params.model,
+        defaultProvider: params.defaultProvider,
+        defaultModel: params.defaultModel,
+      }),
     },
     channel: route.channel,
     to: route.to,
@@ -110,13 +121,6 @@ async function sendResetSessionNotice(params: {
     threadId: params.threadId,
     cfg: params.cfg,
   });
-  if (!result?.ok) {
-    logVerbose(
-      `reset notice route failed channel=${route.channel} to=${route.to}: ${result?.error ?? "unknown error"}`,
-    );
-    return false;
-  }
-  return true;
 }
 
 type RunPreparedReplyParams = {
@@ -230,11 +234,19 @@ export async function runPreparedReply(
   const isGroupChat = sessionCtx.ChatType === "group";
   const wasMentioned = ctx.WasMentioned === true;
   const isHeartbeat = opts?.isHeartbeat === true;
+  const { typingPolicy, suppressTyping } = resolveRunTypingPolicy({
+    requestedPolicy: opts?.typingPolicy,
+    suppressTyping: opts?.suppressTyping === true,
+    isHeartbeat,
+    originatingChannel: ctx.OriginatingChannel,
+  });
   const typingMode = resolveTypingMode({
     configured: sessionCfg?.typingMode ?? agentCfg?.typingMode,
     isGroupChat,
     wasMentioned,
     isHeartbeat,
+    typingPolicy,
+    suppressTyping,
   });
   const shouldInjectGroupIntro = Boolean(
     isGroupChat && (isFirstTurnInSession || sessionEntry?.groupActivationNeedsSystemIntro),
@@ -293,28 +305,6 @@ export async function runPreparedReply(
   const hasMediaAttachment = Boolean(
     sessionCtx.MediaPath || (sessionCtx.MediaPaths && sessionCtx.MediaPaths.length > 0),
   );
-  const shouldSendResetNotice =
-    resetTriggered && command.isAuthorizedSender && !opts?.resetSessionNoticeHandled;
-  const resetNoticeText = shouldSendResetNotice
-    ? buildResetSessionNoticeText({
-        provider,
-        model,
-        defaultProvider,
-        defaultModel,
-      })
-    : undefined;
-  let resetNoticeDelivered = false;
-  if (resetNoticeText) {
-    resetNoticeDelivered = await sendResetSessionNotice({
-      ctx,
-      command,
-      sessionKey,
-      cfg,
-      accountId: ctx.AccountId,
-      threadId: ctx.MessageThreadId,
-      text: resetNoticeText,
-    });
-  }
   if (!baseBodyTrimmed && !hasMediaAttachment) {
     await typing.onReplyStart();
     logVerbose("Inbound body empty after normalization; skipping agent run");
@@ -407,6 +397,20 @@ export async function runPreparedReply(
       }
     }
   }
+  if (resetTriggered && command.isAuthorizedSender) {
+    await sendResetSessionNotice({
+      ctx,
+      command,
+      sessionKey,
+      cfg,
+      accountId: ctx.AccountId,
+      threadId: ctx.MessageThreadId,
+      provider,
+      model,
+      defaultProvider,
+      defaultModel,
+    });
+  }
   const sessionIdFinal = sessionId ?? crypto.randomUUID();
   const sessionFile = resolveSessionFilePath(
     sessionIdFinal,
@@ -467,8 +471,8 @@ export async function runPreparedReply(
       sessionId: sessionIdFinal,
       sessionKey,
       messageProvider: resolveOriginMessageProvider({
-        originatingChannel: sessionCtx.OriginatingChannel,
-        provider: sessionCtx.Provider,
+        originatingChannel: ctx.OriginatingChannel ?? sessionCtx.OriginatingChannel,
+        provider: ctx.Surface ?? ctx.Provider ?? sessionCtx.Provider,
       }),
       agentAccountId: sessionCtx.AccountId,
       groupId: resolveGroupSessionKey(sessionCtx)?.id ?? undefined,
@@ -505,7 +509,7 @@ export async function runPreparedReply(
     },
   };
 
-  const agentReply = await runReplyAgent({
+  return runReplyAgent({
     commandBody: prefixedCommandBody,
     followupRun,
     queueKey,
@@ -531,11 +535,4 @@ export async function runPreparedReply(
     shouldInjectGroupIntro,
     typingMode,
   });
-  if (!resetNoticeText) {
-    return agentReply;
-  }
-  if (!resetNoticeDelivered) {
-    return prependReplyPayload({ text: resetNoticeText }, agentReply);
-  }
-  return agentReply;
 }
