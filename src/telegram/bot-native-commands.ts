@@ -65,6 +65,7 @@ import {
   evaluateTelegramGroupPolicyAccess,
 } from "./group-access.js";
 import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
+import { resolveTelegramBlockReplyTimeoutMs } from "./reply-timeouts.js";
 import { buildInlineKeyboard } from "./send.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
@@ -617,6 +618,7 @@ export const registerTelegramNativeCommands = ({
             typeof telegramCfg.blockStreaming === "boolean"
               ? !telegramCfg.blockStreaming
               : undefined;
+          const blockReplyTimeoutMs = resolveTelegramBlockReplyTimeoutMs(telegramCfg);
 
           const deliveryState = {
             delivered: false,
@@ -663,6 +665,7 @@ export const registerTelegramNativeCommands = ({
             replyOptions: {
               skillFilter,
               disableBlockStreaming,
+              blockReplyTimeoutMs,
               onModelSelected,
             },
           });

@@ -27,6 +27,7 @@ import type { TelegramStreamMode } from "./bot/types.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { resolveTelegramDraftStreamingChunking } from "./draft-chunking.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
+import { resolveTelegramBlockReplyTimeoutMs } from "./reply-timeouts.js";
 import { editMessageTelegram } from "./send.js";
 import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
 
@@ -276,6 +277,7 @@ export const dispatchTelegramMessage = async ({
         : draftStream
           ? true
           : undefined;
+  const blockReplyTimeoutMs = resolveTelegramBlockReplyTimeoutMs(telegramCfg);
 
   const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
     cfg,
@@ -530,6 +532,7 @@ export const dispatchTelegramMessage = async ({
       replyOptions: {
         skillFilter,
         disableBlockStreaming,
+        blockReplyTimeoutMs,
         onPartialReply: draftStream ? (payload) => updateDraftFromPartial(payload) : undefined,
         onAssistantMessageStart: draftStream
           ? async () => {

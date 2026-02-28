@@ -658,7 +658,7 @@ describe("runReplyAgent block streaming", () => {
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
     expect(onBlockReply.mock.calls[0][0].text).toBe("Hello");
-    expect(result).toBeUndefined();
+    expect(result).toMatchObject({ text: "Final message" });
   });
 
   it("returns the final payload when onBlockReply times out", async () => {

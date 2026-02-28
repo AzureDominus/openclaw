@@ -28,6 +28,7 @@ const internalHookMocks = vi.hoisted(() => ({
 }));
 const queueMocks = vi.hoisted(() => ({
   enqueueDelivery: vi.fn(async () => "mock-queue-id"),
+  markDeliveryDelivered: vi.fn(async () => {}),
   ackDelivery: vi.fn(async () => {}),
   failDelivery: vi.fn(async () => {}),
 }));
@@ -50,6 +51,7 @@ vi.mock("../../hooks/internal-hooks.js", () => ({
 }));
 vi.mock("./delivery-queue.js", () => ({
   enqueueDelivery: queueMocks.enqueueDelivery,
+  markDeliveryDelivered: queueMocks.markDeliveryDelivered,
   ackDelivery: queueMocks.ackDelivery,
   failDelivery: queueMocks.failDelivery,
 }));
@@ -113,6 +115,8 @@ describe("deliverOutboundPayloads", () => {
     internalHookMocks.triggerInternalHook.mockClear();
     queueMocks.enqueueDelivery.mockClear();
     queueMocks.enqueueDelivery.mockResolvedValue("mock-queue-id");
+    queueMocks.markDeliveryDelivered.mockClear();
+    queueMocks.markDeliveryDelivered.mockResolvedValue(undefined);
     queueMocks.ackDelivery.mockClear();
     queueMocks.ackDelivery.mockResolvedValue(undefined);
     queueMocks.failDelivery.mockClear();
@@ -650,6 +654,7 @@ describe("deliverOutboundPayloads", () => {
     ).rejects.toThrow("Operation aborted");
 
     expect(queueMocks.ackDelivery).toHaveBeenCalledWith("mock-queue-id");
+    expect(queueMocks.markDeliveryDelivered).not.toHaveBeenCalled();
     expect(queueMocks.failDelivery).not.toHaveBeenCalled();
     expect(sendWhatsApp).not.toHaveBeenCalled();
   });
@@ -710,6 +715,8 @@ describe("deliverOutboundPayloads", () => {
       deps: { sendWhatsApp },
     });
 
+    expect(queueMocks.markDeliveryDelivered).toHaveBeenCalledWith("mock-queue-id");
+    expect(queueMocks.ackDelivery).toHaveBeenCalledWith("mock-queue-id");
     expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
       expect.objectContaining({ to: "+1555", content: "hello", success: true }),
       expect.objectContaining({ channelId: "whatsapp" }),

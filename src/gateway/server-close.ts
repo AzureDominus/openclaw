@@ -16,6 +16,7 @@ export function createGatewayCloseHandler(params: {
   cron: { stop: () => void };
   heartbeatRunner: HeartbeatRunner;
   updateCheckStop?: (() => void) | null;
+  deliveryRecoveryLoop?: { stop: () => Promise<void> } | null;
   nodePresenceTimers: Map<string, ReturnType<typeof setInterval>>;
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
   tickInterval: ReturnType<typeof setInterval>;
@@ -44,6 +45,9 @@ export function createGatewayCloseHandler(params: {
       } catch {
         /* ignore */
       }
+    }
+    if (params.deliveryRecoveryLoop) {
+      await params.deliveryRecoveryLoop.stop().catch(() => {});
     }
     if (params.tailscaleCleanup) {
       await params.tailscaleCleanup();

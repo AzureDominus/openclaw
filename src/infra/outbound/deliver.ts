@@ -28,7 +28,12 @@ import type { sendMessageSlack } from "../../slack/send.js";
 import type { sendMessageTelegram } from "../../telegram/send.js";
 import type { sendMessageWhatsApp } from "../../web/outbound.js";
 import { throwIfAborted } from "./abort.js";
-import { ackDelivery, enqueueDelivery, failDelivery } from "./delivery-queue.js";
+import {
+  ackDelivery,
+  enqueueDelivery,
+  failDelivery,
+  markDeliveryDelivered,
+} from "./delivery-queue.js";
 import type { OutboundIdentity } from "./identity.js";
 import type { NormalizedOutboundPayload } from "./payloads.js";
 import { normalizeReplyPayloadsForDelivery } from "./payloads.js";
@@ -267,6 +272,7 @@ export async function deliverOutboundPayloads(
       if (hadPartialFailure) {
         await failDelivery(queueId, "partial delivery failure (bestEffort)").catch(() => {});
       } else {
+        await markDeliveryDelivered(queueId).catch(() => {});
         await ackDelivery(queueId).catch(() => {}); // Best-effort cleanup.
       }
     }

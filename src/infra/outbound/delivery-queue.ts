@@ -43,6 +43,8 @@ type QueuedDeliveryPayload = {
   mirror?: DeliveryMirrorPayload;
 };
 
+export type DeliveryStatus = "pending" | "delivered" | "uncertain";
+
 export interface QueuedDelivery extends QueuedDeliveryPayload {
   id: string;
   enqueuedAt: number;
@@ -50,6 +52,13 @@ export interface QueuedDelivery extends QueuedDeliveryPayload {
   nextAttemptAt?: number;
   retryCount: number;
   lastError?: string;
+  /**
+   * Delivery state persisted separately from file deletion so crash-recovery can
+   * avoid replaying entries that were already sent but not yet unlinked.
+   */
+  deliveryStatus?: DeliveryStatus;
+  deliveredAt?: number;
+  uncertainAt?: number;
 }
 
 function resolveQueueDir(stateDir?: string): string {
@@ -82,6 +91,7 @@ export async function enqueueDelivery(
     id,
     enqueuedAt: Date.now(),
     nextAttemptAt: Date.now(),
+    deliveryStatus: "pending",
     channel: params.channel,
     to: params.to,
     accountId: params.accountId,
@@ -100,6 +110,81 @@ export async function enqueueDelivery(
   await fs.promises.writeFile(tmp, json, { encoding: "utf-8", mode: 0o600 });
   await fs.promises.rename(tmp, filePath);
   return id;
+}
+
+/**
+ * Mark an entry as delivered before ack/unlink.
+ * This allows recovery to skip replay when a process crashes between send and unlink.
+ */
+export async function markDeliveryDelivered(id: string, stateDir?: string): Promise<void> {
+  const filePath = path.join(resolveQueueDir(stateDir), `${id}.json`);
+  let raw: string;
+  try {
+    raw = await fs.promises.readFile(filePath, "utf-8");
+  } catch (err) {
+    const code =
+      err && typeof err === "object" && "code" in err
+        ? String((err as { code?: unknown }).code)
+        : null;
+    if (code === "ENOENT") {
+      return;
+    }
+    throw err;
+  }
+  const entry: QueuedDelivery = JSON.parse(raw);
+  if (entry.deliveryStatus === "delivered") {
+    return;
+  }
+  entry.deliveryStatus = "delivered";
+  entry.deliveredAt = Date.now();
+  entry.lastError = undefined;
+  entry.nextAttemptAt = undefined;
+  const tmp = `${filePath}.${process.pid}.tmp`;
+  await fs.promises.writeFile(tmp, JSON.stringify(entry, null, 2), {
+    encoding: "utf-8",
+    mode: 0o600,
+  });
+  await fs.promises.rename(tmp, filePath);
+}
+
+/**
+ * Mark an entry as uncertain-delivery when transport outcome is ambiguous.
+ * Uncertain entries are retained for operator reconciliation and are not
+ * retried automatically to prevent duplicate sends.
+ */
+export async function markDeliveryUncertain(
+  id: string,
+  error: string,
+  stateDir?: string,
+): Promise<void> {
+  const filePath = path.join(resolveQueueDir(stateDir), `${id}.json`);
+  let raw: string;
+  try {
+    raw = await fs.promises.readFile(filePath, "utf-8");
+  } catch (err) {
+    const code =
+      err && typeof err === "object" && "code" in err
+        ? String((err as { code?: unknown }).code)
+        : null;
+    if (code === "ENOENT") {
+      return;
+    }
+    throw err;
+  }
+  const entry: QueuedDelivery = JSON.parse(raw);
+  if (entry.deliveryStatus === "delivered") {
+    return;
+  }
+  entry.deliveryStatus = "uncertain";
+  entry.uncertainAt = Date.now();
+  entry.lastError = error;
+  entry.nextAttemptAt = undefined;
+  const tmp = `${filePath}.${process.pid}.tmp`;
+  await fs.promises.writeFile(tmp, JSON.stringify(entry, null, 2), {
+    encoding: "utf-8",
+    mode: 0o600,
+  });
+  await fs.promises.rename(tmp, filePath);
 }
 
 /** Remove a successfully delivered entry from the queue. */
@@ -124,9 +209,14 @@ export async function failDelivery(id: string, error: string, stateDir?: string)
   const filePath = path.join(resolveQueueDir(stateDir), `${id}.json`);
   const raw = await fs.promises.readFile(filePath, "utf-8");
   const entry: QueuedDelivery = JSON.parse(raw);
+  if (entry.deliveryStatus === "delivered" || entry.deliveryStatus === "uncertain") {
+    return;
+  }
   entry.retryCount += 1;
   entry.lastError = error;
   entry.nextAttemptAt = Date.now() + computeBackoffMs(entry.retryCount);
+  entry.deliveryStatus = "pending";
+  entry.deliveredAt = undefined;
   const tmp = `${filePath}.${process.pid}.tmp`;
   await fs.promises.writeFile(tmp, JSON.stringify(entry, null, 2), {
     encoding: "utf-8",
@@ -241,6 +331,23 @@ export async function recoverPendingDeliveries(opts: {
       opts.log.warn(`Recovery time budget exceeded — ${deferred} entries deferred to next restart`);
       break;
     }
+    if (entry.deliveryStatus === "delivered") {
+      opts.log.info(
+        `Delivery ${entry.id} already marked delivered — removing stale queue entry without replay`,
+      );
+      await ackDelivery(entry.id, opts.stateDir).catch((err) => {
+        opts.log.error(`Failed to remove delivered stale entry ${entry.id}: ${String(err)}`);
+      });
+      recovered += 1;
+      continue;
+    }
+    if (entry.deliveryStatus === "uncertain") {
+      opts.log.warn(
+        `Delivery ${entry.id} has uncertain outcome — skipping automatic replay to avoid duplicates`,
+      );
+      skipped += 1;
+      continue;
+    }
     if (entry.retryCount >= MAX_RETRIES) {
       opts.log.warn(
         `Delivery ${entry.id} exceeded max retries (${entry.retryCount}/${MAX_RETRIES}) — moving to failed/`,
@@ -288,6 +395,7 @@ export async function recoverPendingDeliveries(opts: {
         mirror: entry.mirror,
         skipQueue: true, // Prevent re-enqueueing during recovery
       });
+      await markDeliveryDelivered(entry.id, opts.stateDir);
       await ackDelivery(entry.id, opts.stateDir);
       recovered += 1;
       opts.log.info(`Recovered delivery ${entry.id} to ${entry.channel}:${entry.to}`);

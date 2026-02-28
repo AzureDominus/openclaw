@@ -543,18 +543,21 @@ export async function startGatewayServer(
     void cron.start().catch((err) => logCron.error(`failed to start: ${String(err)}`));
   }
 
-  // Recover pending outbound deliveries from previous crash/restart.
+  let deliveryRecoveryLoop: {
+    stop: () => Promise<void>;
+  } | null = null;
   if (!minimalTestGateway) {
-    void (async () => {
-      const { recoverPendingDeliveries } = await import("../infra/outbound/delivery-queue.js");
-      const { deliverOutboundPayloads } = await import("../infra/outbound/deliver.js");
-      const logRecovery = log.child("delivery-recovery");
-      await recoverPendingDeliveries({
-        deliver: deliverOutboundPayloads,
-        log: logRecovery,
-        cfg: cfgAtStart,
-      });
-    })().catch((err) => log.error(`Delivery recovery failed: ${String(err)}`));
+    const { createDeliveryRecoveryLoop } =
+      await import("../infra/outbound/delivery-recovery-loop.js");
+    const { deliverOutboundPayloads } = await import("../infra/outbound/deliver.js");
+    const logRecovery = log.child("delivery-recovery");
+    deliveryRecoveryLoop = createDeliveryRecoveryLoop({
+      deliver: deliverOutboundPayloads,
+      log: logRecovery,
+      cfg: cfgAtStart,
+      intervalMs: 10_000,
+    });
+    deliveryRecoveryLoop.start();
   }
 
   const execApprovalManager = new ExecApprovalManager();
@@ -744,6 +747,7 @@ export async function startGatewayServer(
     cron,
     heartbeatRunner,
     updateCheckStop: stopGatewayUpdateCheck,
+    deliveryRecoveryLoop: deliveryRecoveryLoop ?? undefined,
     nodePresenceTimers,
     broadcast,
     tickInterval,

@@ -2,7 +2,14 @@ import type { TypingCallbacks } from "../../channels/typing.js";
 import type { HumanDelayConfig } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { extractErrorCode, formatErrorMessage } from "../../infra/errors.js";
-import { ackDelivery, enqueueDelivery, failDelivery } from "../../infra/outbound/delivery-queue.js";
+import {
+  ackDelivery,
+  enqueueDelivery,
+  failDelivery,
+  isPermanentDeliveryError,
+  markDeliveryDelivered,
+  markDeliveryUncertain,
+} from "../../infra/outbound/delivery-queue.js";
 import type { OutboundChannel } from "../../infra/outbound/targets.js";
 import { type RetryConfig, resolveRetryConfig, retryAsync } from "../../infra/retry.js";
 import { sleep } from "../../utils.js";
@@ -13,6 +20,10 @@ import type { ResponsePrefixContext } from "./response-prefix-template.js";
 import type { TypingController } from "./typing.js";
 
 export type ReplyDispatchKind = "tool" | "block" | "final";
+export type ReplyDispatchResult =
+  | { status: "sent"; kind: ReplyDispatchKind }
+  | { status: "skipped"; kind: ReplyDispatchKind; reason: NormalizeReplySkipReason }
+  | { status: "failed"; kind: ReplyDispatchKind; error: unknown };
 
 type ReplyDispatchErrorHandler = (err: unknown, info: { kind: ReplyDispatchKind }) => void;
 
@@ -40,6 +51,7 @@ type DurableReplyRoute = {
 
 const DEFAULT_HUMAN_DELAY_MIN_MS = 800;
 const DEFAULT_HUMAN_DELAY_MAX_MS = 2500;
+const DEFAULT_REPLY_DELIVERY_TIMEOUT_MS = 0;
 const BLOCK_DELIVERY_RETRY_DEFAULTS = {
   attempts: 3,
   minDelayMs: 400,
@@ -48,27 +60,79 @@ const BLOCK_DELIVERY_RETRY_DEFAULTS = {
 };
 
 const BLOCK_DELIVERY_TRANSIENT_ERRNO_CODES = new Set([
-  "ECONNRESET",
-  "ECONNABORTED",
   "ECONNREFUSED",
-  "ETIMEDOUT",
   "EAI_AGAIN",
   "ENOTFOUND",
   "EHOSTUNREACH",
   "ENETUNREACH",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "ERR_NETWORK",
+]);
+
+const BLOCK_DELIVERY_AMBIGUOUS_ERRNO_CODES = new Set([
+  "ECONNRESET",
+  "ECONNABORTED",
+  "ETIMEDOUT",
   "EPIPE",
+  "UND_ERR_SOCKET",
+  "UND_ERR_BODY_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_ABORTED",
 ]);
 
 const BLOCK_DELIVERY_TRANSIENT_ERROR_RE =
-  /429|408|5\d\d|rate limit|retry after|timeout|timed out|network|socket|connect|connection|reset|closed|temporar|unavailable|fetch failed|try again/i;
+  /429|408|5\d\d|rate limit|retry after|temporar|unavailable|fetch failed|try again/i;
+const BLOCK_DELIVERY_AMBIGUOUS_ERROR_RE =
+  /timeout|timed out|network|socket|connect|connection|reset|closed|hang up|premature|eof/i;
 
-function shouldRetryBlockDelivery(err: unknown): boolean {
-  const code = extractErrorCode(err)?.toUpperCase();
-  if (code && BLOCK_DELIVERY_TRANSIENT_ERRNO_CODES.has(code)) {
-    return true;
+type ReplyDeliveryErrorClass = "permanent" | "transient-definitive" | "transient-ambiguous";
+
+function classifyReplyDeliveryError(err: unknown, timeoutError?: Error): ReplyDeliveryErrorClass {
+  if (timeoutError && err === timeoutError) {
+    return "transient-ambiguous";
   }
-  return BLOCK_DELIVERY_TRANSIENT_ERROR_RE.test(formatErrorMessage(err));
+  const message = formatErrorMessage(err);
+  if (isPermanentDeliveryError(message)) {
+    return "permanent";
+  }
+  const code = extractErrorCode(err)?.toUpperCase();
+  if (code) {
+    if (BLOCK_DELIVERY_AMBIGUOUS_ERRNO_CODES.has(code)) {
+      return "transient-ambiguous";
+    }
+    if (BLOCK_DELIVERY_TRANSIENT_ERRNO_CODES.has(code)) {
+      return "transient-definitive";
+    }
+  }
+  if (BLOCK_DELIVERY_AMBIGUOUS_ERROR_RE.test(message)) {
+    return "transient-ambiguous";
+  }
+  if (BLOCK_DELIVERY_TRANSIENT_ERROR_RE.test(message)) {
+    return "transient-definitive";
+  }
+  return "permanent";
 }
+
+const withReplyDeliveryTimeout = async <T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  timeoutError: Error,
+): Promise<T> => {
+  if (!timeoutMs || timeoutMs <= 0) {
+    return promise;
+  }
+  let timer: NodeJS.Timeout | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(timeoutError), timeoutMs);
+  });
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+};
 
 /** Generate a random delay within the configured range. */
 function getHumanDelay(config: HumanDelayConfig | undefined): number {
@@ -103,6 +167,8 @@ export type ReplyDispatcherOptions = {
   humanDelay?: HumanDelayConfig;
   /** Retry policy for transient block-delivery failures in shared dispatch. */
   blockRetry?: RetryConfig;
+  /** Optional hard timeout override for a single channel delivery attempt. */
+  deliveryTimeoutMs?: number;
   /** Optional write-ahead queue route used for crash-safe reply delivery replay. */
   durableRoute?: DurableReplyRoute;
   /** Strip OPENCLAW_STOP_REASON marker lines before delivery. */
@@ -129,6 +195,9 @@ export type ReplyDispatcher = {
   sendToolResult: (payload: ReplyPayload) => boolean;
   sendBlockReply: (payload: ReplyPayload) => boolean;
   sendFinalReply: (payload: ReplyPayload) => boolean;
+  sendToolResultAsync: (payload: ReplyPayload) => Promise<ReplyDispatchResult>;
+  sendBlockReplyAsync: (payload: ReplyPayload) => Promise<ReplyDispatchResult>;
+  sendFinalReplyAsync: (payload: ReplyPayload) => Promise<ReplyDispatchResult>;
   waitForIdle: () => Promise<void>;
   getQueuedCounts: () => Record<ReplyDispatchKind, number>;
   markComplete: () => void;
@@ -165,6 +234,10 @@ function normalizeReplyPayloadInternal(
 
 export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDispatcher {
   const blockRetryConfig = resolveRetryConfig(BLOCK_DELIVERY_RETRY_DEFAULTS, options.blockRetry);
+  const deliveryTimeoutMs = Math.max(
+    0,
+    options.deliveryTimeoutMs ?? DEFAULT_REPLY_DELIVERY_TIMEOUT_MS,
+  );
   let sendChain: Promise<void> = Promise.resolve();
   // Track in-flight deliveries so we can emit a reliable "idle" signal.
   // Start with pending=1 as a "reservation" to prevent premature gateway restart.
@@ -186,7 +259,19 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     waitForIdle: () => sendChain,
   });
 
-  const enqueue = (kind: ReplyDispatchKind, payload: ReplyPayload) => {
+  const enqueue = (
+    kind: ReplyDispatchKind,
+    payload: ReplyPayload,
+    onResult?: (result: ReplyDispatchResult) => void,
+  ) => {
+    let resultSettled = false;
+    const settleResult = (result: ReplyDispatchResult) => {
+      if (resultSettled) {
+        return;
+      }
+      resultSettled = true;
+      onResult?.(result);
+    };
     const normalized = normalizeReplyPayloadInternal(payload, {
       responsePrefix: options.responsePrefix,
       responsePrefixContext: options.responsePrefixContext,
@@ -196,10 +281,12 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
       stripFailedToolCallDraft: options.stripFailedToolCallDraft,
       onSkip: (reason) => {
         logVerbose(`reply-delivery status=skipped kind=${kind} reason=${reason}`);
+        settleResult({ status: "skipped", kind, reason });
         options.onSkip?.(payload, { kind, reason });
       },
     });
     if (!normalized) {
+      settleResult({ status: "skipped", kind, reason: "empty" });
       return false;
     }
     queuedCounts[kind] += 1;
@@ -241,21 +328,57 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
               return null;
             })
           : null;
+        const timeoutError =
+          deliveryTimeoutMs > 0
+            ? new Error(`${kind} reply delivery timed out after ${deliveryTimeoutMs}ms`)
+            : undefined;
         try {
+          const maxDefinitiveRetries = Math.max(0, blockRetryConfig.attempts - 1);
+          let definitiveRetriesUsed = 0;
           // Safe: deliver is called inside an async .then() callback, so even a synchronous
           // throw becomes a rejection that flows through .catch()/.finally(), ensuring cleanup.
-          await retryAsync(() => options.deliver(normalized, { kind }), {
-            ...blockRetryConfig,
-            label: `${kind} reply delivery`,
-            shouldRetry: (err) => shouldRetryBlockDelivery(err),
-            onRetry: (info) => {
-              const maxRetries = Math.max(1, info.maxAttempts - 1);
-              logVerbose(
-                `${kind} reply delivery retry ${info.attempt}/${maxRetries} in ${info.delayMs}ms: ${formatErrorMessage(info.err)}`,
-              );
+          await retryAsync(
+            () =>
+              timeoutError
+                ? withReplyDeliveryTimeout(
+                    options.deliver(normalized, { kind }),
+                    deliveryTimeoutMs,
+                    timeoutError,
+                  )
+                : options.deliver(normalized, { kind }),
+            {
+              ...blockRetryConfig,
+              attempts: blockRetryConfig.attempts,
+              label: `${kind} reply delivery`,
+              shouldRetry: (err) => {
+                const classification = classifyReplyDeliveryError(err, timeoutError);
+                if (classification === "permanent") {
+                  return false;
+                }
+                if (classification === "transient-ambiguous") {
+                  return false;
+                }
+                if (definitiveRetriesUsed >= maxDefinitiveRetries) {
+                  return false;
+                }
+                definitiveRetriesUsed += 1;
+                return true;
+              },
+              onRetry: (info) => {
+                const maxRetries = Math.max(1, info.maxAttempts - 1);
+                const classification = classifyReplyDeliveryError(info.err, timeoutError);
+                logVerbose(
+                  `${kind} reply delivery retry ${info.attempt}/${maxRetries} class=${classification} in ${info.delayMs}ms: ${formatErrorMessage(info.err)}`,
+                );
+              },
             },
-          });
+          );
           if (queueId) {
+            await markDeliveryDelivered(queueId, options.durableRoute?.stateDir).catch((err) => {
+              logVerbose(
+                `reply-delivery queue mark-delivered failed kind=${kind} id=${queueId}: ${formatErrorMessage(err)}`,
+              );
+            });
             await ackDelivery(queueId, options.durableRoute?.stateDir).catch((err) => {
               logVerbose(
                 `reply-delivery queue ack failed kind=${kind} id=${queueId}: ${formatErrorMessage(err)}`,
@@ -263,18 +386,30 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
             });
           }
           logVerbose(`reply-delivery status=sent kind=${kind}`);
+          settleResult({ status: "sent", kind });
         } catch (err) {
+          const classification = classifyReplyDeliveryError(err, timeoutError);
           if (queueId) {
-            await failDelivery(
-              queueId,
-              err instanceof Error ? err.message : String(err),
-              options.durableRoute?.stateDir,
-            ).catch((queueErr) => {
-              logVerbose(
-                `reply-delivery queue fail-update failed kind=${kind} id=${queueId}: ${formatErrorMessage(queueErr)}`,
+            const errorText = err instanceof Error ? err.message : String(err);
+            if (classification === "transient-ambiguous") {
+              await markDeliveryUncertain(queueId, errorText, options.durableRoute?.stateDir).catch(
+                (queueErr) => {
+                  logVerbose(
+                    `reply-delivery queue uncertain-update failed kind=${kind} id=${queueId}: ${formatErrorMessage(queueErr)}`,
+                  );
+                },
               );
-            });
+            } else {
+              await failDelivery(queueId, errorText, options.durableRoute?.stateDir).catch(
+                (queueErr) => {
+                  logVerbose(
+                    `reply-delivery queue fail-update failed kind=${kind} id=${queueId}: ${formatErrorMessage(queueErr)}`,
+                  );
+                },
+              );
+            }
           }
+          settleResult({ status: "failed", kind, error: err });
           throw err;
         }
       })
@@ -300,6 +435,29 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     return true;
   };
 
+  const enqueueAsync = (
+    kind: ReplyDispatchKind,
+    payload: ReplyPayload,
+  ): Promise<ReplyDispatchResult> =>
+    new Promise((resolve) => {
+      let resolved = false;
+      const resolveOnce = (result: ReplyDispatchResult) => {
+        if (resolved) {
+          return;
+        }
+        resolved = true;
+        resolve(result);
+      };
+      const accepted = enqueue(kind, payload, resolveOnce);
+      if (!accepted) {
+        queueMicrotask(() => {
+          if (!resolved) {
+            resolveOnce({ status: "skipped", kind, reason: "empty" });
+          }
+        });
+      }
+    });
+
   const markComplete = () => {
     if (completeCalled) {
       return;
@@ -324,6 +482,9 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     sendToolResult: (payload) => enqueue("tool", payload),
     sendBlockReply: (payload) => enqueue("block", payload),
     sendFinalReply: (payload) => enqueue("final", payload),
+    sendToolResultAsync: (payload) => enqueueAsync("tool", payload),
+    sendBlockReplyAsync: (payload) => enqueueAsync("block", payload),
+    sendFinalReplyAsync: (payload) => enqueueAsync("final", payload),
     waitForIdle: () => sendChain,
     getQueuedCounts: () => ({ ...queuedCounts }),
     markComplete,

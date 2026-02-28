@@ -1099,6 +1099,17 @@ describe("followup queue collect routing", () => {
 const emptyCfg = {} as OpenClawConfig;
 
 describe("createReplyDispatcher", () => {
+  it("returns skipped for empty async sends", async () => {
+    const deliver = vi.fn().mockResolvedValue(undefined);
+    const dispatcher = createReplyDispatcher({ deliver });
+
+    const result = await dispatcher.sendFinalReplyAsync({});
+    await dispatcher.waitForIdle();
+
+    expect(result).toEqual({ status: "skipped", kind: "final", reason: "empty" });
+    expect(deliver).not.toHaveBeenCalled();
+  });
+
   it("drops empty payloads and silent tokens without media", async () => {
     const deliver = vi.fn().mockResolvedValue(undefined);
     const dispatcher = createReplyDispatcher({ deliver });
@@ -1183,11 +1194,40 @@ describe("createReplyDispatcher", () => {
     expect(delivered).toEqual(["tool", "block", "final"]);
   });
 
+  it("does not retry ambiguous timeout errors and still continues with final replies", async () => {
+    vi.useFakeTimers();
+    const hanging = new Promise<void>(() => {});
+    const deliver: Parameters<typeof createReplyDispatcher>[0]["deliver"] = vi
+      .fn()
+      .mockImplementationOnce(async () => await hanging)
+      .mockResolvedValueOnce(undefined);
+    const onError = vi.fn();
+    const dispatcher = createReplyDispatcher({
+      deliver,
+      onError,
+      blockRetry: { attempts: 1, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+      deliveryTimeoutMs: 5,
+    });
+
+    const blockResultPromise = dispatcher.sendBlockReplyAsync({ text: "block" });
+    dispatcher.sendFinalReply({ text: "final" });
+    const idle = dispatcher.waitForIdle();
+    await vi.advanceTimersByTimeAsync(6);
+    const blockResult = await blockResultPromise;
+    await idle;
+
+    expect(blockResult).toMatchObject({ status: "failed", kind: "block" });
+    expect(deliver).toHaveBeenCalledTimes(2);
+    expect((deliver.mock.calls[1] ?? [])[0]).toMatchObject({ text: "final" });
+    expect(onError).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+
   it("retries transient block delivery failures", async () => {
     vi.useFakeTimers();
     const deliver: Parameters<typeof createReplyDispatcher>[0]["deliver"] = vi
       .fn()
-      .mockRejectedValueOnce(new Error("network timeout"))
+      .mockRejectedValueOnce(new Error("429 rate limited"))
       .mockResolvedValueOnce(undefined);
     const onError = vi.fn();
     const dispatcher = createReplyDispatcher({
@@ -1210,7 +1250,7 @@ describe("createReplyDispatcher", () => {
     vi.useFakeTimers();
     const deliver: Parameters<typeof createReplyDispatcher>[0]["deliver"] = vi
       .fn()
-      .mockRejectedValueOnce(new Error("socket hang up"))
+      .mockRejectedValueOnce(new Error("429 rate limited"))
       .mockResolvedValueOnce(undefined);
     const onError = vi.fn();
     const dispatcher = createReplyDispatcher({

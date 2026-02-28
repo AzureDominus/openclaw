@@ -3,11 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../../auto-reply/types.js";
-import { telegramPlugin } from "../../../extensions/telegram/src/channel.js";
-import { whatsappPlugin } from "../../../extensions/whatsapp/src/channel.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { typedCases } from "../../test-utils/typed-cases.js";
 import {
   ackDelivery,
@@ -17,6 +13,8 @@ import {
   failDelivery,
   isPermanentDeliveryError,
   loadPendingDeliveries,
+  markDeliveryDelivered,
+  markDeliveryUncertain,
   MAX_RETRIES,
   moveToFailed,
   recoverPendingDeliveries,
@@ -126,6 +124,49 @@ describe("delivery-queue", () => {
       expect(entry.lastError).toBe("connection refused");
       expect(typeof entry.nextAttemptAt).toBe("number");
       expect(entry.nextAttemptAt).toBeGreaterThan(Date.now() - 60_000);
+    });
+  });
+
+  describe("markDeliveryDelivered", () => {
+    it("marks an entry as delivered without removing it", async () => {
+      const id = await enqueueDelivery(
+        {
+          channel: "telegram",
+          to: "123",
+          payloads: [{ text: "test" }],
+        },
+        tmpDir,
+      );
+
+      await markDeliveryDelivered(id, tmpDir);
+
+      const queueDir = path.join(tmpDir, "delivery-queue");
+      const entry = JSON.parse(fs.readFileSync(path.join(queueDir, `${id}.json`), "utf-8"));
+      expect(entry.deliveryStatus).toBe("delivered");
+      expect(typeof entry.deliveredAt).toBe("number");
+    });
+  });
+
+  describe("markDeliveryUncertain", () => {
+    it("marks an entry as uncertain and clears retry scheduling", async () => {
+      const id = await enqueueDelivery(
+        {
+          channel: "telegram",
+          to: "123",
+          payloads: [{ text: "test" }],
+        },
+        tmpDir,
+      );
+
+      await failDelivery(id, "network timeout", tmpDir);
+      await markDeliveryUncertain(id, "socket hang up", tmpDir);
+
+      const queueDir = path.join(tmpDir, "delivery-queue");
+      const entry = JSON.parse(fs.readFileSync(path.join(queueDir, `${id}.json`), "utf-8"));
+      expect(entry.deliveryStatus).toBe("uncertain");
+      expect(entry.lastError).toBe("socket hang up");
+      expect(entry.nextAttemptAt).toBeUndefined();
+      expect(typeof entry.uncertainAt).toBe("number");
     });
   });
 
@@ -323,6 +364,41 @@ describe("delivery-queue", () => {
       await runRecovery({ deliver });
 
       expect(deliver).toHaveBeenCalledWith(expect.objectContaining({ skipQueue: true }));
+    });
+
+    it("does not replay entries already marked as delivered", async () => {
+      const id = await enqueueDelivery(
+        { channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] },
+        tmpDir,
+      );
+      await markDeliveryDelivered(id, tmpDir);
+
+      const deliver = vi.fn().mockResolvedValue([]);
+      const { result } = await runRecovery({ deliver });
+
+      expect(deliver).not.toHaveBeenCalled();
+      expect(result.recovered).toBe(1);
+      const remaining = await loadPendingDeliveries(tmpDir);
+      expect(remaining).toHaveLength(0);
+    });
+
+    it("does not replay entries marked as uncertain", async () => {
+      const id = await enqueueDelivery(
+        { channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] },
+        tmpDir,
+      );
+      await markDeliveryUncertain(id, "socket timeout", tmpDir);
+
+      const deliver = vi.fn().mockResolvedValue([]);
+      const { result } = await runRecovery({ deliver });
+
+      expect(deliver).not.toHaveBeenCalled();
+      expect(result.recovered).toBe(0);
+      expect(result.failed).toBe(0);
+      expect(result.skipped).toBe(1);
+      const remaining = await loadPendingDeliveries(tmpDir);
+      expect(remaining).toHaveLength(1);
+      expect(remaining[0]?.deliveryStatus).toBe("uncertain");
     });
 
     it("replays stored delivery options during recovery", async () => {
