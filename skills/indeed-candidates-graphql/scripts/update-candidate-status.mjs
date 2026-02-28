@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from "node:fs/promises";
+import { resolveIndeedAuthConfig } from "./indeed-config.mjs";
 
 function parseArgs(argv) {
   const out = { dryRun: false, headers: {} };
@@ -29,7 +30,7 @@ function parseArgs(argv) {
 }
 
 function usage() {
-  return `Usage:\n  update-candidate-status.mjs --endpoint <url> --cookie-file <cookies.json> --api-key <key> --status <shortlist|undecided|rejected> --candidate-submission-id <id> [options]\n\nOptions:\n  --job-id <id>                         required for rejected\n  --employer-key <key>\n  --ctk <token>\n  --referer <url>\n  --client-sub-app <name>\n  --client-sub-app-component <name>\n  --header 'Key=Value'                  (repeatable)\n  --dry-run\n\nEnv fallbacks:\n  INDEED_GRAPHQL_ENDPOINT, INDEED_COOKIE_FILE, INDEED_API_KEY, INDEED_EMPLOYER_KEY, INDEED_CTK\n`;
+  return `Usage:\n  update-candidate-status.mjs --endpoint <url> --cookie-file <cookies.json> --api-key <key> --status <shortlist|undecided|rejected> --candidate-submission-id <id> [options]\n\nOptions:\n  --job-id <id>                         required for rejected\n  --employer-key <key>\n  --ctk <token>\n  --referer <url>\n  --client-sub-app <name>\n  --client-sub-app-component <name>\n  --header 'Key=Value'                  (repeatable)\n  --dry-run\n\nEnv fallbacks:\n  INDEED_GRAPHQL_ENDPOINT, INDEED_COOKIE_FILE, INDEED_API_KEY, INDEED_EMPLOYER_KEY, INDEED_CTK\n\nAuto config fallback:\n  INDEED_CONFIG_FILE or discovered indeed.config.yaml\n`;
 }
 
 function sentimentFor(status) {
@@ -82,11 +83,21 @@ async function main() {
     process.exit(0);
   }
 
-  const endpoint = args.endpoint || process.env.INDEED_GRAPHQL_ENDPOINT;
-  const cookieFile = args.cookieFile || process.env.INDEED_COOKIE_FILE;
-  const apiKey = args.apiKey || process.env.INDEED_API_KEY;
-  const employerKey = args.employerKey || process.env.INDEED_EMPLOYER_KEY;
-  const ctk = args.ctk || process.env.INDEED_CTK;
+  const resolved = await resolveIndeedAuthConfig({
+    endpoint: args.endpoint || process.env.INDEED_GRAPHQL_ENDPOINT,
+    cookieFile: args.cookieFile || process.env.INDEED_COOKIE_FILE,
+    apiKey: args.apiKey || process.env.INDEED_API_KEY,
+    employerKey: args.employerKey || process.env.INDEED_EMPLOYER_KEY,
+    ctk: args.ctk || process.env.INDEED_CTK,
+    referer: args.referer,
+    clientSubApp: args.clientSubApp,
+    clientSubAppComponent: args.clientSubAppComponent,
+  });
+
+  const { endpoint, cookieFile, apiKey, employerKey, ctk } = resolved;
+  const referer = resolved.referer;
+  const clientSubApp = resolved.clientSubApp;
+  const clientSubAppComponent = resolved.clientSubAppComponent;
 
   if (!endpoint || !cookieFile || !apiKey || !args.status || !args.candidateSubmissionId) {
     console.error("Missing required args.\n");
@@ -115,11 +126,9 @@ async function main() {
     "indeed-api-key": apiKey,
     ...(employerKey ? { "indeed-employer-key": employerKey } : {}),
     ...(ctk ? { "indeed-ctk": ctk } : {}),
-    ...(args.referer ? { referer: args.referer } : {}),
-    ...(args.clientSubApp ? { "indeed-client-sub-app": args.clientSubApp } : {}),
-    ...(args.clientSubAppComponent
-      ? { "indeed-client-sub-app-component": args.clientSubAppComponent }
-      : {}),
+    ...(referer ? { referer } : {}),
+    ...(clientSubApp ? { "indeed-client-sub-app": clientSubApp } : {}),
+    ...(clientSubAppComponent ? { "indeed-client-sub-app-component": clientSubAppComponent } : {}),
     ...(cookieHeader ? { cookie: cookieHeader } : {}),
     ...args.headers,
   };
