@@ -121,4 +121,5 @@ indeed-cli sync:candidates --status shortlist --no-download
 - GraphQL operations and endpoint details: `references/graphql-operations.md`
 - Status filter mapping (UI parity): `references/status-mapping.md`
 - Search scope + count parity (all-jobs vs configured-jobs): `references/search-scope-and-count-parity.md`
+- Jobs + job descriptions (`job:list`, `job:get`): `references/jobs-and-descriptions.md`
 - How to add/extend features (recon + inferred methods): `references/feature-extension-playbook.md`
