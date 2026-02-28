@@ -18,13 +18,18 @@ This keeps the system flexible for scripts while still giving easy CLI operation
 
 ## Required inputs
 
-- GraphQL endpoint
-- API key (`indeed-api-key`)
-- Employer key (`indeed-employer-key`)
-- CTK token (`indeed-ctk`, recommended)
-- Cookie file (JSON cookie export)
+Preferred: let scripts auto-load from `indeed.config.yaml`.
 
-Environment variables are supported by scripts:
+Auto-discovery order:
+
+- `INDEED_CONFIG_FILE` (explicit path)
+- `./indeed.config.yaml` (current working directory)
+- `../indeed-cli/indeed.config.yaml` (relative to current working directory)
+- `~/repos/indeed-cli/indeed.config.yaml`
+- `/home/admin/repos/indeed-cli/indeed.config.yaml`
+- `~/.config/indeed-cli/indeed.config.yaml`
+
+Supported env var overrides (highest precedence after CLI flags):
 
 - `INDEED_GRAPHQL_ENDPOINT`
 - `INDEED_API_KEY`
@@ -81,10 +86,16 @@ Use this when you need custom filters or operations not covered by the CLI.
 
 If `indeed-cli` is installed:
 
-- Metadata-only search:
+- Metadata-only search (UI-parity scope):
 
 ```bash
-indeed-cli search:candidates --status new --query "kevin"
+indeed-cli search:candidates --status new --scope all-jobs --query "kevin"
+```
+
+- Metadata-only search (configured job IDs only):
+
+```bash
+indeed-cli search:candidates --status new --scope configured-jobs
 ```
 
 - Sync with files (explicit):
@@ -109,4 +120,5 @@ indeed-cli sync:candidates --status shortlist --no-download
 
 - GraphQL operations and endpoint details: `references/graphql-operations.md`
 - Status filter mapping (UI parity): `references/status-mapping.md`
+- Search scope + count parity (all-jobs vs configured-jobs): `references/search-scope-and-count-parity.md`
 - How to add/extend features (recon + inferred methods): `references/feature-extension-playbook.md`
