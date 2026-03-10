@@ -765,18 +765,25 @@ export async function startGatewayServer(
     void cron.start().catch((err) => logCron.error(`failed to start: ${String(err)}`));
   }
 
-  // Recover pending outbound deliveries from previous crash/restart.
+  let deliveryRetryService: { stop: () => Promise<void> } | null = null;
+
   if (!minimalTestGateway) {
     void (async () => {
-      const { recoverPendingDeliveries } = await import("../infra/outbound/delivery-queue.js");
-      const { deliverOutboundPayloads } = await import("../infra/outbound/deliver.js");
+      const { startDeliveryRetryService } = await import("../infra/outbound/delivery-queue.js");
+      const { deliverOutboundPayloads, sendOutboundTyping } =
+        await import("../infra/outbound/deliver.js");
       const logRecovery = log.child("delivery-recovery");
-      await recoverPendingDeliveries({
+      return startDeliveryRetryService({
         deliver: deliverOutboundPayloads,
+        sendTyping: sendOutboundTyping,
         log: logRecovery,
         cfg: cfgAtStart,
       });
-    })().catch((err) => log.error(`Delivery recovery failed: ${String(err)}`));
+    })()
+      .then((service) => {
+        deliveryRetryService = service;
+      })
+      .catch((err) => log.error(`Delivery retry worker failed to start: ${String(err)}`));
   }
 
   const execApprovalManager = new ExecApprovalManager();
@@ -1021,6 +1028,11 @@ export async function startGatewayServer(
     pluginServices,
     cron,
     heartbeatRunner,
+    deliveryRetryService: {
+      stop: async () => {
+        await deliveryRetryService?.stop();
+      },
+    },
     updateCheckStop: stopGatewayUpdateCheck,
     nodePresenceTimers,
     broadcast,

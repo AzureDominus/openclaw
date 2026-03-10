@@ -101,6 +101,8 @@ export type ChannelOutboundContext = {
   silent?: boolean;
 };
 
+export type ChannelOutboundTypingContext = Omit<ChannelOutboundContext, "text" | "mediaUrl">;
+
 export type ChannelOutboundPayloadContext = ChannelOutboundContext & {
   payload: ReplyPayload;
 };
@@ -121,6 +123,7 @@ export type ChannelOutboundAdapter = {
   sendPayload?: (ctx: ChannelOutboundPayloadContext) => Promise<OutboundDeliveryResult>;
   sendText?: (ctx: ChannelOutboundContext) => Promise<OutboundDeliveryResult>;
   sendMedia?: (ctx: ChannelOutboundContext) => Promise<OutboundDeliveryResult>;
+  sendTyping?: (ctx: ChannelOutboundTypingContext) => Promise<void>;
   sendPoll?: (ctx: ChannelPollContext) => Promise<ChannelPollResult>;
 };
 

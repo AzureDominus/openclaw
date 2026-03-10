@@ -3,14 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../../auto-reply/types.js";
-import { telegramPlugin } from "../../../extensions/telegram/src/channel.js";
-import { whatsappPlugin } from "../../../extensions/whatsapp/src/channel.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { typedCases } from "../../test-utils/typed-cases.js";
 import {
   ackDelivery,
+  claimDelivery,
   computeBackoffMs,
   type DeliverFn,
   enqueueDelivery,
@@ -18,7 +15,6 @@ import {
   isEntryEligibleForRecoveryRetry,
   isPermanentDeliveryError,
   loadPendingDeliveries,
-  MAX_RETRIES,
   moveToFailed,
   recoverPendingDeliveries,
 } from "./delivery-queue.js";
@@ -387,24 +383,25 @@ describe("delivery-queue", () => {
       expect(remaining).toHaveLength(0);
     });
 
-    it("moves entries that exceeded max retries to failed/", async () => {
-      // Create an entry and manually set retryCount to MAX_RETRIES.
+    it("keeps high-retry transient entries live", async () => {
       const id = await enqueueDelivery(
         { channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] },
         tmpDir,
       );
-      setEntryState(id, { retryCount: MAX_RETRIES });
+      setEntryState(id, { retryCount: 99, lastAttemptAt: Date.now() - 601_000 });
 
-      const deliver = vi.fn();
+      const deliver = vi.fn().mockRejectedValue(new Error("network down"));
       const { result } = await runRecovery({ deliver });
 
-      expect(deliver).not.toHaveBeenCalled();
-      expect(result.skippedMaxRetries).toBe(1);
-      expect(result.deferredBackoff).toBe(0);
+      expect(deliver).toHaveBeenCalledTimes(1);
+      expect(result.failed).toBe(1);
+      expect(result.skippedMaxRetries).toBe(0);
+      expect(result.deferredBackoff).toBe(1);
 
-      // Entry should be in failed/ directory.
-      const failedDir = path.join(tmpDir, "delivery-queue", "failed");
-      expect(fs.existsSync(path.join(failedDir, `${id}.json`))).toBe(true);
+      const entries = await loadPendingDeliveries(tmpDir);
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.id).toBe(id);
+      expect(entries[0]?.retryCount).toBe(100);
     });
 
     it("increments retryCount on failed recovery attempt", async () => {
@@ -507,8 +504,7 @@ describe("delivery-queue", () => {
       const remaining = await loadPendingDeliveries(tmpDir);
       expect(remaining).toHaveLength(3);
 
-      // Should have logged a warning about deferred entries.
-      expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("deferred to next restart"));
+      expect(log.warn).not.toHaveBeenCalled();
     });
 
     it("defers entries when the persisted next-attempt time exceeds recovery budget", async () => {
@@ -539,7 +535,7 @@ describe("delivery-queue", () => {
       const remaining = await loadPendingDeliveries(tmpDir);
       expect(remaining).toHaveLength(1);
 
-      expect(log.info).toHaveBeenCalledWith(expect.stringContaining("not ready for retry yet"));
+      expect(log.info).not.toHaveBeenCalledWith(expect.stringContaining("Recovered delivery"));
     });
 
     it("continues past high-backoff entries and recovers ready entries behind them", async () => {
@@ -589,23 +585,25 @@ describe("delivery-queue", () => {
       const firstDeliver = vi.fn().mockResolvedValue([]);
       const firstRun = await runRecovery({ deliver: firstDeliver, maxRecoveryMs: 60_000 });
       expect(firstRun.result).toEqual({
-        recovered: 0,
+        recovered: 1,
         failed: 0,
         skippedMaxRetries: 0,
-        deferredBackoff: 1,
+        deferredBackoff: 0,
+        uncertain: 0,
       });
-      expect(firstDeliver).not.toHaveBeenCalled();
+      expect(firstDeliver).toHaveBeenCalledTimes(1);
 
       vi.setSystemTime(new Date(start.getTime() + 600_000 + 1));
       const secondDeliver = vi.fn().mockResolvedValue([]);
       const secondRun = await runRecovery({ deliver: secondDeliver, maxRecoveryMs: 60_000 });
       expect(secondRun.result).toEqual({
-        recovered: 1,
+        recovered: 0,
         failed: 0,
         skippedMaxRetries: 0,
         deferredBackoff: 0,
+        uncertain: 0,
       });
-      expect(secondDeliver).toHaveBeenCalledTimes(1);
+      expect(secondDeliver).not.toHaveBeenCalled();
 
       const remaining = await loadPendingDeliveries(tmpDir);
       expect(remaining).toHaveLength(0);
@@ -625,16 +623,31 @@ describe("delivery-queue", () => {
       fs.writeFileSync(filePath, JSON.stringify(entry), "utf-8");
 
       const deliver = vi.fn().mockResolvedValue([]);
-      const delay = vi.fn(async () => {});
-      const { result } = await runRecovery({
-        deliver,
-        delay,
-        maxRecoveryMs: 1000,
-      });
-
-      expect(delay).not.toHaveBeenCalled();
+      const { result } = await runRecovery({ deliver, maxRecoveryMs: 1000 });
       expect(deliver).toHaveBeenCalledTimes(1);
-      expect(result).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+      expect(result).toEqual({
+        recovered: 1,
+        failed: 0,
+        skippedMaxRetries: 0,
+        deferredBackoff: 0,
+        uncertain: 0,
+      });
+    });
+
+    it("moves stale in-flight entries to uncertain instead of replaying", async () => {
+      const id = await enqueueDelivery(
+        { channel: "whatsapp", to: "+1", payloads: [{ text: "stale" }] },
+        tmpDir,
+      );
+      await claimDelivery(id, tmpDir);
+
+      const deliver = vi.fn().mockResolvedValue([]);
+      const { result } = await runRecovery({ deliver });
+
+      expect(deliver).not.toHaveBeenCalled();
+      expect(result.uncertain).toBe(1);
+      const uncertainPath = path.join(tmpDir, "delivery-queue", "uncertain", `${id}.sending`);
+      expect(fs.existsSync(uncertainPath)).toBe(true);
     });
 
     it("returns zeros when queue is empty", async () => {
@@ -646,6 +659,7 @@ describe("delivery-queue", () => {
         failed: 0,
         skippedMaxRetries: 0,
         deferredBackoff: 0,
+        uncertain: 0,
       });
       expect(deliver).not.toHaveBeenCalled();
     });

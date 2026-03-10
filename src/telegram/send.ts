@@ -24,7 +24,7 @@ import { normalizePollInput, type PollInput } from "../polls.js";
 import { loadWebMedia } from "../web/media.js";
 import { type ResolvedTelegramAccount, resolveTelegramAccount } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
-import { buildTelegramThreadParams } from "./bot/helpers.js";
+import { buildTelegramThreadParams, buildTypingThreadParams } from "./bot/helpers.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { splitTelegramCaption } from "./caption.js";
 import { resolveTelegramFetch } from "./fetch.js";
@@ -75,6 +75,11 @@ type TelegramSendResult = {
   messageId: string;
   chatId: string;
 };
+
+type TelegramTypingOpts = Pick<
+  TelegramSendOpts,
+  "cfg" | "token" | "accountId" | "verbose" | "api" | "messageThreadId"
+>;
 
 type TelegramMessageLike = {
   message_id?: number;
@@ -881,6 +886,40 @@ export async function sendMessageTelegram(
     direction: "outbound",
   });
   return { messageId: String(messageId), chatId: String(res?.chat?.id ?? chatId) };
+}
+
+export async function sendTypingTelegram(to: string, opts: TelegramTypingOpts = {}): Promise<void> {
+  const { cfg, account, api } = resolveTelegramApiContext(opts);
+  const chatId = await resolveAndPersistChatId({
+    cfg,
+    api,
+    lookupTarget: to,
+    persistTarget: to,
+    verbose: opts.verbose,
+  });
+  const requestWithDiag = createTelegramRequestWithDiag({
+    cfg,
+    account,
+    verbose: opts.verbose,
+    shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "send" }),
+  });
+  const threadParams = buildTypingThreadParams(opts.messageThreadId);
+  await requestWithDiag(
+    async () =>
+      await withTelegramApiErrorLogging({
+        operation: "sendChatAction",
+        fn: async () =>
+          await api.sendChatAction(
+            chatId,
+            "typing",
+            threadParams as Parameters<typeof api.sendChatAction>[2],
+          ),
+      }),
+    "typing",
+    {
+      shouldLog: (err) => isRecoverableTelegramNetworkError(err, { context: "send" }),
+    },
+  );
 }
 
 export async function reactMessageTelegram(

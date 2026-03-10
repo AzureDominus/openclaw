@@ -8,15 +8,11 @@ import type { OutboundChannel } from "./targets.js";
 
 const QUEUE_DIRNAME = "delivery-queue";
 const FAILED_DIRNAME = "failed";
-const MAX_RETRIES = 5;
+const UNCERTAIN_DIRNAME = "uncertain";
+const DEFAULT_SCAN_MAX_IDLE_MS = 5_000;
 
 /** Backoff delays in milliseconds indexed by retry count (1-based). */
-const BACKOFF_MS: readonly number[] = [
-  5_000, // retry 1: 5s
-  25_000, // retry 2: 25s
-  120_000, // retry 3: 2m
-  600_000, // retry 4: 10m
-];
+const BACKOFF_MS: readonly number[] = [5_000, 25_000, 120_000, 600_000];
 
 type DeliveryMirrorPayload = {
   sessionKey: string;
@@ -45,12 +41,15 @@ type QueuedDeliveryPayload = {
 
 export interface QueuedDelivery extends QueuedDeliveryPayload {
   id: string;
+  routeKey: string;
   enqueuedAt: number;
   /** Absolute timestamp when this entry is eligible for retry. */
   nextAttemptAt?: number;
   retryCount: number;
   lastAttemptAt?: number;
   lastError?: string;
+  claimedAt?: number;
+  claimedByPid?: number;
 }
 
 export type RecoverySummary = {
@@ -58,6 +57,31 @@ export type RecoverySummary = {
   failed: number;
   skippedMaxRetries: number;
   deferredBackoff: number;
+  uncertain: number;
+};
+
+export type DeliverFn = (
+  params: {
+    cfg: OpenClawConfig;
+  } & QueuedDeliveryPayload & {
+      skipQueue?: boolean;
+    },
+) => Promise<unknown>;
+
+export type SendTypingFn = (
+  params: {
+    cfg: OpenClawConfig;
+  } & Pick<QueuedDeliveryPayload, "channel" | "to" | "accountId" | "threadId" | "silent">,
+) => Promise<void>;
+
+export interface RecoveryLogger {
+  info(msg: string): void;
+  warn(msg: string): void;
+  error(msg: string): void;
+}
+
+export type DeliveryRetryService = {
+  stop: () => Promise<void>;
 };
 
 function resolveQueueDir(stateDir?: string): string {
@@ -69,17 +93,27 @@ function resolveFailedDir(stateDir?: string): string {
   return path.join(resolveQueueDir(stateDir), FAILED_DIRNAME);
 }
 
+function resolveUncertainDir(stateDir?: string): string {
+  return path.join(resolveQueueDir(stateDir), UNCERTAIN_DIRNAME);
+}
+
 function resolveQueueEntryPaths(
   id: string,
   stateDir?: string,
 ): {
   jsonPath: string;
+  sendingPath: string;
   deliveredPath: string;
+  failedPath: string;
+  uncertainPath: string;
 } {
   const queueDir = resolveQueueDir(stateDir);
   return {
     jsonPath: path.join(queueDir, `${id}.json`),
+    sendingPath: path.join(queueDir, `${id}.sending`),
     deliveredPath: path.join(queueDir, `${id}.delivered`),
+    failedPath: path.join(resolveFailedDir(stateDir), `${id}.json`),
+    uncertainPath: path.join(resolveUncertainDir(stateDir), `${id}.sending`),
   };
 }
 
@@ -87,6 +121,15 @@ function getErrnoCode(err: unknown): string | null {
   return err && typeof err === "object" && "code" in err
     ? String((err as { code?: unknown }).code)
     : null;
+}
+
+function buildRouteKey(
+  params: Pick<QueuedDeliveryPayload, "channel" | "to" | "accountId" | "threadId">,
+) {
+  const threadId =
+    params.threadId == null || params.threadId === "" ? "" : String(params.threadId).trim();
+  const accountId = params.accountId?.trim() ?? "";
+  return `${params.channel}:${accountId}:${params.to}:${threadId}`;
 }
 
 async function unlinkBestEffort(filePath: string): Promise<void> {
@@ -97,11 +140,147 @@ async function unlinkBestEffort(filePath: string): Promise<void> {
   }
 }
 
-/** Ensure the queue directory (and failed/ subdirectory) exist. */
+async function loadEntryFromPath(filePath: string): Promise<QueuedDelivery> {
+  const raw = await fs.promises.readFile(filePath, "utf-8");
+  const parsed = JSON.parse(raw) as QueuedDelivery;
+  return normalizeQueuedDeliveryEntry(parsed).entry;
+}
+
+async function writeEntryToPath(filePath: string, entry: QueuedDelivery): Promise<void> {
+  const tmp = `${filePath}.${process.pid}.tmp`;
+  await fs.promises.writeFile(tmp, JSON.stringify(entry, null, 2), {
+    encoding: "utf-8",
+    mode: 0o600,
+  });
+  await fs.promises.rename(tmp, filePath);
+}
+
+function isFinitePositive(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+function normalizeQueuedDeliveryEntry(entry: QueuedDelivery): {
+  entry: QueuedDelivery;
+  migrated: boolean;
+} {
+  let migrated = false;
+  let next = entry;
+  if (!entry.routeKey) {
+    next = {
+      ...next,
+      routeKey: buildRouteKey(next),
+    };
+    migrated = true;
+  }
+  const hasAttemptTimestamp = isFinitePositive(next.lastAttemptAt);
+  if (!hasAttemptTimestamp && next.retryCount > 0 && isFinitePositive(next.enqueuedAt)) {
+    next = {
+      ...next,
+      lastAttemptAt: next.enqueuedAt,
+    };
+    migrated = true;
+  }
+  return { entry: next, migrated };
+}
+
+async function cleanupDeliveredMarkers(queueDir: string): Promise<void> {
+  let files: string[];
+  try {
+    files = await fs.promises.readdir(queueDir);
+  } catch (err) {
+    if (getErrnoCode(err) === "ENOENT") {
+      return;
+    }
+    throw err;
+  }
+  await Promise.all(
+    files
+      .filter((file) => file.endsWith(".delivered"))
+      .map(async (file) => await unlinkBestEffort(path.join(queueDir, file))),
+  );
+}
+
+async function moveStaleSendingEntriesToUncertain(opts: {
+  log?: RecoveryLogger;
+  stateDir?: string;
+}): Promise<number> {
+  const queueDir = resolveQueueDir(opts.stateDir);
+  let files: string[];
+  try {
+    files = await fs.promises.readdir(queueDir);
+  } catch (err) {
+    if (getErrnoCode(err) === "ENOENT") {
+      return 0;
+    }
+    throw err;
+  }
+  const sendingFiles = files.filter((file) => file.endsWith(".sending"));
+  if (sendingFiles.length === 0) {
+    return 0;
+  }
+  await fs.promises.mkdir(resolveUncertainDir(opts.stateDir), { recursive: true, mode: 0o700 });
+  let moved = 0;
+  for (const file of sendingFiles) {
+    const src = path.join(queueDir, file);
+    const dest = path.join(resolveUncertainDir(opts.stateDir), file);
+    try {
+      await fs.promises.rename(src, dest);
+      moved += 1;
+      opts.log?.warn(
+        `Delivery ${file.replace(/\\.sending$/, "")} was in-flight during restart — moved to uncertain/`,
+      );
+    } catch (err) {
+      if (getErrnoCode(err) === "ENOENT") {
+        continue;
+      }
+      opts.log?.error(
+        `Failed moving stale in-flight delivery ${file} to uncertain/: ${String(err)}`,
+      );
+    }
+  }
+  return moved;
+}
+
+function groupRouteHeads(entries: QueuedDelivery[]): QueuedDelivery[] {
+  const heads = new Map<string, QueuedDelivery>();
+  for (const entry of entries) {
+    const current = heads.get(entry.routeKey);
+    if (!current || entry.enqueuedAt < current.enqueuedAt) {
+      heads.set(entry.routeKey, entry);
+    }
+  }
+  return [...heads.values()].toSorted((a, b) => {
+    const aNext = a.nextAttemptAt ?? a.enqueuedAt;
+    const bNext = b.nextAttemptAt ?? b.enqueuedAt;
+    return aNext - bNext || a.enqueuedAt - b.enqueuedAt;
+  });
+}
+
+function selectReadyRouteHead(
+  entries: QueuedDelivery[],
+  now: number,
+): {
+  ready: QueuedDelivery | null;
+  minSleepMs: number;
+} {
+  const routeHeads = groupRouteHeads(entries);
+  let minSleepMs = DEFAULT_SCAN_MAX_IDLE_MS;
+  for (const entry of routeHeads) {
+    const eligibility = isEntryEligibleForRecoveryRetry(entry, now);
+    if (eligibility.eligible) {
+      return { ready: entry, minSleepMs: 0 };
+    }
+    minSleepMs = Math.min(minSleepMs, Math.max(1, Math.trunc(eligibility.remainingBackoffMs)));
+  }
+  return { ready: null, minSleepMs };
+}
+
+/** Ensure the queue directory (and failed/uncertain subdirectories) exist. */
 export async function ensureQueueDir(stateDir?: string): Promise<string> {
   const queueDir = resolveQueueDir(stateDir);
   await fs.promises.mkdir(queueDir, { recursive: true, mode: 0o700 });
   await fs.promises.mkdir(resolveFailedDir(stateDir), { recursive: true, mode: 0o700 });
+  await fs.promises.mkdir(resolveUncertainDir(stateDir), { recursive: true, mode: 0o700 });
   return queueDir;
 }
 
@@ -116,6 +295,7 @@ export async function enqueueDelivery(
   const id = generateSecureUuid();
   const entry: QueuedDelivery = {
     id,
+    routeKey: buildRouteKey(params),
     enqueuedAt: Date.now(),
     nextAttemptAt: Date.now(),
     channel: params.channel,
@@ -130,62 +310,73 @@ export async function enqueueDelivery(
     mirror: params.mirror,
     retryCount: 0,
   };
-  const filePath = path.join(queueDir, `${id}.json`);
-  const tmp = `${filePath}.${process.pid}.tmp`;
-  const json = JSON.stringify(entry, null, 2);
-  await fs.promises.writeFile(tmp, json, { encoding: "utf-8", mode: 0o600 });
-  await fs.promises.rename(tmp, filePath);
+  await writeEntryToPath(path.join(queueDir, `${id}.json`), entry);
   return id;
 }
 
-/** Remove a successfully delivered entry from the queue.
- *
- * Uses a two-phase approach so that a crash between delivery and cleanup
- * does not cause the message to be replayed on the next recovery scan:
- *   Phase 1: atomic rename  {id}.json → {id}.delivered
- *   Phase 2: unlink the .delivered marker
- * If the process dies between phase 1 and phase 2 the marker is cleaned up
- * by {@link loadPendingDeliveries} on the next startup without re-sending.
- */
-export async function ackDelivery(id: string, stateDir?: string): Promise<void> {
-  const { jsonPath, deliveredPath } = resolveQueueEntryPaths(id, stateDir);
+export async function claimDelivery(id: string, stateDir?: string): Promise<QueuedDelivery | null> {
+  const { jsonPath, sendingPath } = resolveQueueEntryPaths(id, stateDir);
   try {
-    // Phase 1: atomic rename marks the delivery as complete.
-    await fs.promises.rename(jsonPath, deliveredPath);
+    await fs.promises.rename(jsonPath, sendingPath);
   } catch (err) {
-    const code = getErrnoCode(err);
-    if (code === "ENOENT") {
-      // .json already gone — may have been renamed by a previous ack attempt.
-      // Try to clean up a leftover .delivered marker if present.
-      await unlinkBestEffort(deliveredPath);
-      return;
+    if (getErrnoCode(err) === "ENOENT") {
+      return null;
     }
     throw err;
   }
-  // Phase 2: remove the marker file.
+  const entry = await loadEntryFromPath(sendingPath);
+  const claimed: QueuedDelivery = {
+    ...entry,
+    claimedAt: Date.now(),
+    claimedByPid: process.pid,
+  };
+  await writeEntryToPath(sendingPath, claimed);
+  return claimed;
+}
+
+/** Remove a successfully delivered entry from the queue. */
+export async function ackDelivery(id: string, stateDir?: string): Promise<void> {
+  const { jsonPath, sendingPath, deliveredPath } = resolveQueueEntryPaths(id, stateDir);
+  for (const source of [sendingPath, jsonPath]) {
+    try {
+      await fs.promises.rename(source, deliveredPath);
+      await unlinkBestEffort(deliveredPath);
+      return;
+    } catch (err) {
+      if (getErrnoCode(err) === "ENOENT") {
+        continue;
+      }
+      throw err;
+    }
+  }
   await unlinkBestEffort(deliveredPath);
 }
 
 /** Update a queue entry after a failed delivery attempt. */
 export async function failDelivery(id: string, error: string, stateDir?: string): Promise<void> {
-  const filePath = path.join(resolveQueueDir(stateDir), `${id}.json`);
-  const raw = await fs.promises.readFile(filePath, "utf-8");
-  const entry: QueuedDelivery = JSON.parse(raw);
-  entry.retryCount += 1;
-  entry.lastAttemptAt = Date.now();
-  entry.lastError = error;
-  entry.nextAttemptAt = Date.now() + computeBackoffMs(entry.retryCount);
-  const tmp = `${filePath}.${process.pid}.tmp`;
-  await fs.promises.writeFile(tmp, JSON.stringify(entry, null, 2), {
-    encoding: "utf-8",
-    mode: 0o600,
-  });
-  await fs.promises.rename(tmp, filePath);
+  const { jsonPath, sendingPath } = resolveQueueEntryPaths(id, stateDir);
+  const sourcePath = fs.existsSync(sendingPath) ? sendingPath : jsonPath;
+  const raw = await fs.promises.readFile(sourcePath, "utf-8");
+  const entry = normalizeQueuedDeliveryEntry(JSON.parse(raw) as QueuedDelivery).entry;
+  const nextEntry: QueuedDelivery = {
+    ...entry,
+    retryCount: entry.retryCount + 1,
+    lastAttemptAt: Date.now(),
+    lastError: error,
+    nextAttemptAt: Date.now() + computeBackoffMs(entry.retryCount + 1),
+  };
+  delete nextEntry.claimedAt;
+  delete nextEntry.claimedByPid;
+  await writeEntryToPath(sourcePath, nextEntry);
+  if (sourcePath === sendingPath) {
+    await fs.promises.rename(sendingPath, jsonPath);
+  }
 }
 
 /** Load all pending delivery entries from the queue directory. */
 export async function loadPendingDeliveries(stateDir?: string): Promise<QueuedDelivery[]> {
   const queueDir = resolveQueueDir(stateDir);
+  await cleanupDeliveredMarkers(queueDir);
   let files: string[];
   try {
     files = await fs.promises.readdir(queueDir);
@@ -195,14 +386,6 @@ export async function loadPendingDeliveries(stateDir?: string): Promise<QueuedDe
       return [];
     }
     throw err;
-  }
-  // Clean up .delivered markers left by ackDelivery if the process crashed
-  // between the rename and the unlink.
-  for (const file of files) {
-    if (!file.endsWith(".delivered")) {
-      continue;
-    }
-    await unlinkBestEffort(path.join(queueDir, file));
   }
 
   const entries: QueuedDelivery[] = [];
@@ -218,14 +401,9 @@ export async function loadPendingDeliveries(stateDir?: string): Promise<QueuedDe
       }
       const raw = await fs.promises.readFile(filePath, "utf-8");
       const parsed = JSON.parse(raw) as QueuedDelivery;
-      const { entry, migrated } = normalizeLegacyQueuedDeliveryEntry(parsed);
+      const { entry, migrated } = normalizeQueuedDeliveryEntry(parsed);
       if (migrated) {
-        const tmp = `${filePath}.${process.pid}.tmp`;
-        await fs.promises.writeFile(tmp, JSON.stringify(entry, null, 2), {
-          encoding: "utf-8",
-          mode: 0o600,
-        });
-        await fs.promises.rename(tmp, filePath);
+        await writeEntryToPath(filePath, entry);
       }
       entries.push(entry);
     } catch {
@@ -237,12 +415,19 @@ export async function loadPendingDeliveries(stateDir?: string): Promise<QueuedDe
 
 /** Move a queue entry to the failed/ subdirectory. */
 export async function moveToFailed(id: string, stateDir?: string): Promise<void> {
-  const queueDir = resolveQueueDir(stateDir);
-  const failedDir = resolveFailedDir(stateDir);
-  await fs.promises.mkdir(failedDir, { recursive: true, mode: 0o700 });
-  const src = path.join(queueDir, `${id}.json`);
-  const dest = path.join(failedDir, `${id}.json`);
-  await fs.promises.rename(src, dest);
+  const { jsonPath, sendingPath, failedPath } = resolveQueueEntryPaths(id, stateDir);
+  await fs.promises.mkdir(resolveFailedDir(stateDir), { recursive: true, mode: 0o700 });
+  for (const source of [sendingPath, jsonPath]) {
+    try {
+      await fs.promises.rename(source, failedPath);
+      return;
+    } catch (err) {
+      if (getErrnoCode(err) === "ENOENT") {
+        continue;
+      }
+      throw err;
+    }
+  }
 }
 
 /** Compute the backoff delay in ms for a given retry count. */
@@ -269,13 +454,8 @@ export function isEntryEligibleForRecoveryRetry(
   if (firstReplayAfterCrash) {
     return { eligible: true };
   }
-  const hasAttemptTimestamp =
-    typeof entry.lastAttemptAt === "number" &&
-    Number.isFinite(entry.lastAttemptAt) &&
-    entry.lastAttemptAt > 0;
-  const baseAttemptAt = hasAttemptTimestamp
-    ? (entry.lastAttemptAt ?? entry.enqueuedAt)
-    : entry.enqueuedAt;
+  const hasAttemptTimestamp = isFinitePositive(entry.lastAttemptAt);
+  const baseAttemptAt = hasAttemptTimestamp ? entry.lastAttemptAt! : entry.enqueuedAt;
   const nextEligibleAt = baseAttemptAt + backoff;
   if (now >= nextEligibleAt) {
     return { eligible: true };
@@ -283,152 +463,169 @@ export function isEntryEligibleForRecoveryRetry(
   return { eligible: false, remainingBackoffMs: nextEligibleAt - now };
 }
 
-function normalizeLegacyQueuedDeliveryEntry(entry: QueuedDelivery): {
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function processDeliveryEntry(opts: {
   entry: QueuedDelivery;
-  migrated: boolean;
-} {
-  const hasAttemptTimestamp =
-    typeof entry.lastAttemptAt === "number" &&
-    Number.isFinite(entry.lastAttemptAt) &&
-    entry.lastAttemptAt > 0;
-  if (hasAttemptTimestamp || entry.retryCount <= 0) {
-    return { entry, migrated: false };
-  }
-  const hasEnqueuedTimestamp =
-    typeof entry.enqueuedAt === "number" &&
-    Number.isFinite(entry.enqueuedAt) &&
-    entry.enqueuedAt > 0;
-  if (!hasEnqueuedTimestamp) {
-    return { entry, migrated: false };
-  }
-  return {
-    entry: {
-      ...entry,
-      lastAttemptAt: entry.enqueuedAt,
-    },
-    migrated: true,
-  };
-}
-
-export type DeliverFn = (
-  params: {
-    cfg: OpenClawConfig;
-  } & QueuedDeliveryParams & {
-      skipQueue?: boolean;
-    },
-) => Promise<unknown>;
-
-export interface RecoveryLogger {
-  info(msg: string): void;
-  warn(msg: string): void;
-  error(msg: string): void;
-}
-
-/**
- * On gateway startup, scan the delivery queue and retry any pending entries.
- * Uses exponential backoff and moves entries that exceed MAX_RETRIES to failed/.
- */
-export async function recoverPendingDeliveries(opts: {
   deliver: DeliverFn;
+  sendTyping?: SendTypingFn;
   log: RecoveryLogger;
   cfg: OpenClawConfig;
   stateDir?: string;
-  /** Maximum wall-clock time for recovery in ms. Remaining entries are deferred to next restart. Default: 60 000. */
-  maxRecoveryMs?: number;
-}): Promise<RecoverySummary> {
-  const pending = await loadPendingDeliveries(opts.stateDir);
-  if (pending.length === 0) {
-    return { recovered: 0, failed: 0, skippedMaxRetries: 0, deferredBackoff: 0 };
+}): Promise<"recovered" | "failed" | "deferred"> {
+  const claimed = await claimDelivery(opts.entry.id, opts.stateDir);
+  if (!claimed) {
+    return "deferred";
   }
 
-  // Process oldest first.
-  pending.sort((a, b) => a.enqueuedAt - b.enqueuedAt);
-
-  opts.log.info(`Found ${pending.length} pending delivery entries — starting recovery`);
-
-  const deadline = Date.now() + (opts.maxRecoveryMs ?? 60_000);
-
-  let recovered = 0;
-  let failed = 0;
-  let skippedMaxRetries = 0;
-  let deferredBackoff = 0;
-
-  for (const entry of pending) {
-    const now = Date.now();
-    if (now >= deadline) {
-      const deferred = pending.length - recovered - failed - skippedMaxRetries - deferredBackoff;
-      opts.log.warn(`Recovery time budget exceeded — ${deferred} entries deferred to next restart`);
-      break;
-    }
-    if (entry.retryCount >= MAX_RETRIES) {
-      opts.log.warn(
-        `Delivery ${entry.id} exceeded max retries (${entry.retryCount}/${MAX_RETRIES}) — moving to failed/`,
-      );
-      try {
-        await moveToFailed(entry.id, opts.stateDir);
-      } catch (err) {
-        opts.log.error(`Failed to move entry ${entry.id} to failed/: ${String(err)}`);
-      }
-      skippedMaxRetries += 1;
-      continue;
-    }
-
-    const retryEligibility = isEntryEligibleForRecoveryRetry(entry, now);
-    if (!retryEligibility.eligible) {
-      deferredBackoff += 1;
-      opts.log.info(
-        `Delivery ${entry.id} not ready for retry yet — backoff ${retryEligibility.remainingBackoffMs}ms remaining`,
-      );
-      continue;
-    }
-
+  try {
     try {
-      await opts.deliver({
+      await opts.sendTyping?.({
         cfg: opts.cfg,
-        channel: entry.channel,
-        to: entry.to,
-        accountId: entry.accountId,
-        payloads: entry.payloads,
-        threadId: entry.threadId,
-        replyToId: entry.replyToId,
-        bestEffort: entry.bestEffort,
-        gifPlayback: entry.gifPlayback,
-        silent: entry.silent,
-        mirror: entry.mirror,
-        skipQueue: true, // Prevent re-enqueueing during recovery
+        channel: claimed.channel,
+        to: claimed.to,
+        accountId: claimed.accountId,
+        threadId: claimed.threadId,
+        silent: claimed.silent,
       });
-      await ackDelivery(entry.id, opts.stateDir);
-      recovered += 1;
-      opts.log.info(`Recovered delivery ${entry.id} to ${entry.channel}:${entry.to}`);
     } catch (err) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      if (isPermanentDeliveryError(errMsg)) {
-        opts.log.warn(`Delivery ${entry.id} hit permanent error — moving to failed/: ${errMsg}`);
-        try {
-          await moveToFailed(entry.id, opts.stateDir);
-        } catch (moveErr) {
-          opts.log.error(`Failed to move entry ${entry.id} to failed/: ${String(moveErr)}`);
-        }
-        failed += 1;
-        continue;
-      }
-      try {
-        await failDelivery(entry.id, errMsg, opts.stateDir);
-      } catch {
-        // Best-effort update.
-      }
-      failed += 1;
-      opts.log.warn(`Retry failed for delivery ${entry.id}: ${errMsg}`);
+      opts.log.warn(`Replay typing failed for delivery ${claimed.id}: ${String(err)}`);
     }
-  }
 
-  opts.log.info(
-    `Delivery recovery complete: ${recovered} recovered, ${failed} failed, ${skippedMaxRetries} skipped (max retries), ${deferredBackoff} deferred (backoff)`,
-  );
-  return { recovered, failed, skippedMaxRetries, deferredBackoff };
+    await opts.deliver({
+      cfg: opts.cfg,
+      channel: claimed.channel,
+      to: claimed.to,
+      accountId: claimed.accountId,
+      payloads: claimed.payloads,
+      threadId: claimed.threadId,
+      replyToId: claimed.replyToId,
+      bestEffort: claimed.bestEffort,
+      gifPlayback: claimed.gifPlayback,
+      silent: claimed.silent,
+      mirror: claimed.mirror,
+      skipQueue: true,
+    });
+    await ackDelivery(claimed.id, opts.stateDir);
+    opts.log.info(`Recovered delivery ${claimed.id} to ${claimed.channel}:${claimed.to}`);
+    return "recovered";
+  } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    if (isPermanentDeliveryError(errMsg)) {
+      opts.log.warn(`Delivery ${claimed.id} hit permanent error — moving to failed/: ${errMsg}`);
+      try {
+        await moveToFailed(claimed.id, opts.stateDir);
+      } catch (moveErr) {
+        opts.log.error(`Failed to move entry ${claimed.id} to failed/: ${String(moveErr)}`);
+      }
+      return "failed";
+    }
+    try {
+      await failDelivery(claimed.id, errMsg, opts.stateDir);
+    } catch (queueErr) {
+      opts.log.error(`Failed updating retry state for ${claimed.id}: ${String(queueErr)}`);
+    }
+    opts.log.warn(`Retry failed for delivery ${claimed.id}: ${errMsg}`);
+    return "failed";
+  }
 }
 
-export { MAX_RETRIES };
+/**
+ * One-shot sweep used by tests and startup compatibility paths.
+ * Live gateway retry uses startDeliveryRetryService().
+ */
+export async function recoverPendingDeliveries(opts: {
+  deliver: DeliverFn;
+  sendTyping?: SendTypingFn;
+  log: RecoveryLogger;
+  cfg: OpenClawConfig;
+  stateDir?: string;
+  /** Maximum wall-clock time for recovery in ms. Remaining entries are deferred to the live worker. Default: 60 000. */
+  maxRecoveryMs?: number;
+}): Promise<RecoverySummary> {
+  await ensureQueueDir(opts.stateDir);
+  const uncertain = await moveStaleSendingEntriesToUncertain(opts);
+  const deadline = Date.now() + (opts.maxRecoveryMs ?? 60_000);
+  let recovered = 0;
+  let failed = 0;
+  let deferredBackoff = 0;
+
+  while (Date.now() < deadline) {
+    const pending = await loadPendingDeliveries(opts.stateDir);
+    if (pending.length === 0) {
+      break;
+    }
+    const { ready } = selectReadyRouteHead(pending, Date.now());
+    if (!ready) {
+      deferredBackoff = groupRouteHeads(pending).length;
+      break;
+    }
+    const outcome = await processDeliveryEntry({
+      entry: ready,
+      deliver: opts.deliver,
+      sendTyping: opts.sendTyping,
+      log: opts.log,
+      cfg: opts.cfg,
+      stateDir: opts.stateDir,
+    });
+    if (outcome === "recovered") {
+      recovered += 1;
+    } else if (outcome === "failed") {
+      failed += 1;
+    }
+  }
+
+  return { recovered, failed, skippedMaxRetries: 0, deferredBackoff, uncertain };
+}
+
+export function startDeliveryRetryService(opts: {
+  deliver: DeliverFn;
+  sendTyping?: SendTypingFn;
+  log: RecoveryLogger;
+  cfg: OpenClawConfig;
+  stateDir?: string;
+  maxIdleMs?: number;
+}): DeliveryRetryService {
+  let stopped = false;
+  const loop = (async () => {
+    await ensureQueueDir(opts.stateDir);
+    await moveStaleSendingEntriesToUncertain(opts);
+    while (!stopped) {
+      try {
+        const pending = await loadPendingDeliveries(opts.stateDir);
+        if (pending.length === 0) {
+          await sleep(opts.maxIdleMs ?? DEFAULT_SCAN_MAX_IDLE_MS);
+          continue;
+        }
+        const { ready, minSleepMs } = selectReadyRouteHead(pending, Date.now());
+        if (!ready) {
+          await sleep(Math.min(opts.maxIdleMs ?? DEFAULT_SCAN_MAX_IDLE_MS, minSleepMs));
+          continue;
+        }
+        await processDeliveryEntry({
+          entry: ready,
+          deliver: opts.deliver,
+          sendTyping: opts.sendTyping,
+          log: opts.log,
+          cfg: opts.cfg,
+          stateDir: opts.stateDir,
+        });
+      } catch (err) {
+        opts.log.error(`Delivery retry worker loop failed: ${String(err)}`);
+        await sleep(opts.maxIdleMs ?? DEFAULT_SCAN_MAX_IDLE_MS);
+      }
+    }
+  })();
+
+  return {
+    stop: async () => {
+      stopped = true;
+      await loop.catch(() => {});
+    },
+  };
+}
 
 const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
   /no conversation reference found/i,

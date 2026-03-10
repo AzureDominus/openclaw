@@ -10,6 +10,7 @@ import { loadChannelOutboundAdapter } from "../../channels/plugins/outbound/load
 import type {
   ChannelOutboundAdapter,
   ChannelOutboundContext,
+  ChannelOutboundTypingContext,
 } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
@@ -33,10 +34,10 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { markdownToSignalTextChunks, type SignalTextStyleRange } from "../../signal/format.js";
 import { sendMessageSignal } from "../../signal/send.js";
 import type { sendMessageSlack } from "../../slack/send.js";
-import type { sendMessageTelegram } from "../../telegram/send.js";
+import type { sendMessageTelegram, sendTypingTelegram } from "../../telegram/send.js";
 import type { sendMessageWhatsApp } from "../../web/outbound.js";
 import { throwIfAborted } from "./abort.js";
-import { ackDelivery, enqueueDelivery, failDelivery } from "./delivery-queue.js";
+import { ackDelivery, claimDelivery, enqueueDelivery, failDelivery } from "./delivery-queue.js";
 import type { OutboundIdentity } from "./identity.js";
 import type { NormalizedOutboundPayload } from "./payloads.js";
 import { normalizeReplyPayloadsForDelivery } from "./payloads.js";
@@ -65,6 +66,7 @@ type SendMatrixMessage = (
 export type OutboundSendDeps = {
   sendWhatsApp?: typeof sendMessageWhatsApp;
   sendTelegram?: typeof sendMessageTelegram;
+  sendTelegramTyping?: typeof sendTypingTelegram;
   sendDiscord?: typeof sendMessageDiscord;
   sendSlack?: typeof sendMessageSlack;
   sendSignal?: typeof sendMessageSignal;
@@ -216,6 +218,36 @@ function createChannelOutboundContextBase(
     silent: params.silent,
     mediaLocalRoots: params.mediaLocalRoots,
   };
+}
+
+export async function sendOutboundTyping(params: {
+  cfg: OpenClawConfig;
+  channel: Exclude<OutboundChannel, "none">;
+  to: string;
+  accountId?: string;
+  threadId?: string | number | null;
+  identity?: OutboundIdentity;
+  deps?: OutboundSendDeps;
+  gifPlayback?: boolean;
+  silent?: boolean;
+}): Promise<void> {
+  const outbound = await loadChannelOutboundAdapter(params.channel);
+  if (!outbound?.sendTyping) {
+    return;
+  }
+  const ctx: ChannelOutboundTypingContext = {
+    cfg: params.cfg,
+    to: params.to,
+    accountId: params.accountId,
+    threadId: params.threadId,
+    identity: params.identity,
+    deps: params.deps,
+    gifPlayback: params.gifPlayback,
+    silent: params.silent,
+    mediaLocalRoots: [],
+    replyToId: null,
+  };
+  await outbound.sendTyping(ctx);
 }
 
 const isAbortError = (err: unknown): boolean => err instanceof Error && err.name === "AbortError";
@@ -496,6 +528,13 @@ export async function deliverOutboundPayloads(
         },
       }
     : params;
+
+  if (queueId) {
+    const claimed = await claimDelivery(queueId).catch(() => null);
+    if (!claimed) {
+      throw new Error(`queued delivery ${queueId} could not be claimed for send`);
+    }
+  }
 
   try {
     const results = await deliverOutboundPayloadsCore(wrappedParams);

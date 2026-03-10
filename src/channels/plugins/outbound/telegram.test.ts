@@ -86,6 +86,30 @@ describe("telegramOutbound", () => {
     expect(result).toEqual({ channel: "telegram", messageId: "tg-media-1", chatId: "123" });
   });
 
+  it("passes parsed thread ids for sendTyping", async () => {
+    const sendTelegramTyping = vi.fn().mockResolvedValue(undefined);
+    const sendTyping = telegramOutbound.sendTyping;
+    expect(sendTyping).toBeDefined();
+
+    await sendTyping!({
+      cfg: {},
+      to: "123",
+      text: "",
+      accountId: "work",
+      threadId: "55",
+      deps: { sendTelegramTyping },
+    });
+
+    expect(sendTelegramTyping).toHaveBeenCalledWith(
+      "123",
+      expect.objectContaining({
+        verbose: false,
+        accountId: "work",
+        messageThreadId: 55,
+      }),
+    );
+  });
+
   it("sends payload media list and applies buttons only to first message", async () => {
     const sendTelegram = vi
       .fn()

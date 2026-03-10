@@ -115,8 +115,19 @@ export function isSafeToRetrySendError(err: unknown): boolean {
     return false;
   }
   for (const candidate of collectTelegramErrorCandidates(err)) {
+    const parameters =
+      candidate && typeof candidate === "object" && "parameters" in candidate
+        ? (candidate as { parameters?: { retry_after?: unknown } }).parameters
+        : undefined;
+    if (typeof parameters?.retry_after === "number" && Number.isFinite(parameters.retry_after)) {
+      return true;
+    }
     const code = normalizeCode(getErrorCode(candidate));
     if (code && PRE_CONNECT_ERROR_CODES.has(code)) {
+      return true;
+    }
+    const message = formatErrorMessage(candidate).trim().toLowerCase();
+    if (message && GRAMMY_NETWORK_REQUEST_FAILED_AFTER_RE.test(message)) {
       return true;
     }
   }

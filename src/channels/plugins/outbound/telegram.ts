@@ -1,13 +1,13 @@
 import type { OutboundSendDeps } from "../../../infra/outbound/deliver.js";
 import type { TelegramInlineButtons } from "../../../telegram/button-types.js";
-import type { ChannelOutboundAdapter } from "../types.js";
 import { markdownToTelegramHtmlChunks } from "../../../telegram/format.js";
 import {
   parseTelegramReplyToMessageId,
   parseTelegramThreadId,
 } from "../../../telegram/outbound-params.js";
-import { sendMessageTelegram } from "../../../telegram/send.js";
+import { sendMessageTelegram, sendTypingTelegram } from "../../../telegram/send.js";
 import { resolveChannelMediaMaxBytes } from "../media-limits.js";
+import type { ChannelOutboundAdapter } from "../types.js";
 
 function resolveTelegramMaxBytes(params: {
   cfg: Parameters<typeof resolveChannelMediaMaxBytes>[0]["cfg"];
@@ -53,6 +53,32 @@ function resolveTelegramSendContext(params: {
   };
 }
 
+function resolveTelegramTypingContext(params: {
+  cfg: NonNullable<Parameters<typeof sendTypingTelegram>[1]>["cfg"];
+  deps?: OutboundSendDeps;
+  accountId?: string | null;
+  threadId?: string | number | null;
+}): {
+  sendTyping: typeof sendTypingTelegram;
+  baseOpts: {
+    cfg: NonNullable<Parameters<typeof sendTypingTelegram>[1]>["cfg"];
+    verbose: false;
+    messageThreadId?: number;
+    accountId?: string;
+  };
+} {
+  const sendTyping = params.deps?.sendTelegramTyping ?? sendTypingTelegram;
+  return {
+    sendTyping,
+    baseOpts: {
+      verbose: false,
+      cfg: params.cfg,
+      messageThreadId: parseTelegramThreadId(params.threadId),
+      accountId: params.accountId ?? undefined,
+    },
+  };
+}
+
 export const telegramOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   chunker: markdownToTelegramHtmlChunks,
@@ -81,7 +107,6 @@ export const telegramOutbound: ChannelOutboundAdapter = {
     deps,
     replyToId,
     threadId,
-    cfg,
   }) => {
     const { send, baseOpts } = resolveTelegramSendContext({
       cfg,
@@ -98,6 +123,15 @@ export const telegramOutbound: ChannelOutboundAdapter = {
       mediaLocalRoots,
     });
     return { channel: "telegram", ...result };
+  },
+  sendTyping: async ({ cfg, to, accountId, deps, threadId }) => {
+    const { sendTyping, baseOpts } = resolveTelegramTypingContext({
+      cfg,
+      deps,
+      accountId,
+      threadId,
+    });
+    await sendTyping(to, baseOpts);
   },
   sendPayload: async ({
     cfg,
