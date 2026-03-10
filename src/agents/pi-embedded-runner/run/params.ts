@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../../../config/config.js";
 import type { enqueueCommand } from "../../../process/command-queue.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.js";
+import type { FailoverReason } from "../../pi-embedded-helpers.js";
 import type { BlockReplyPayload } from "../../pi-embedded-payloads.js";
 import type { BlockReplyChunking, ToolResultFormat } from "../../pi-embedded-subscribe.js";
 import type { SkillSnapshot } from "../../skills.js";
@@ -125,4 +126,14 @@ export type RunEmbeddedPiAgentParams = {
    * where transient service pressure is often model-scoped.
    */
   allowTransientCooldownProbe?: boolean;
+  /** Optional user-visible retry callback for inner runner retries. */
+  onRetryScheduled?: (event: {
+    provider: string;
+    model: string;
+    reason: FailoverReason;
+    source: "cooldown" | "error";
+    retryAttempt: number;
+    maxRetries: number;
+    waitMs: number;
+  }) => void | Promise<void>;
 };

@@ -916,8 +916,18 @@ export async function runEmbeddedPiAgent(
         if (reason !== "overloaded") {
           return;
         }
-        overloadFailoverAttempts += 1;
-        const delayMs = computeBackoff(OVERLOAD_FAILOVER_BACKOFF_POLICY, overloadFailoverAttempts);
+        const retryAttempt = overloadFailoverAttempts + 1;
+        const delayMs = computeBackoff(OVERLOAD_FAILOVER_BACKOFF_POLICY, retryAttempt);
+        await params.onRetryScheduled?.({
+          provider,
+          model: modelId,
+          reason,
+          source: "error",
+          retryAttempt,
+          maxRetries: MAX_RUN_LOOP_ITERATIONS,
+          waitMs: delayMs,
+        });
+        overloadFailoverAttempts = retryAttempt;
         log.warn(
           `overload backoff before failover for ${provider}/${modelId}: attempt=${overloadFailoverAttempts} delayMs=${delayMs}`,
         );

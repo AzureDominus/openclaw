@@ -3,10 +3,7 @@ import fs from "node:fs";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionId } from "../../agents/cli-session.js";
-import {
-  runWithModelFallback,
-  type ModelRetryScheduledEvent,
-} from "../../agents/model-fallback.js";
+import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
@@ -206,7 +203,15 @@ export async function runAgentTurnWithFallback(params: {
       };
       const blockReplyPipeline = params.blockReplyPipeline;
       const onToolResult = params.opts?.onToolResult;
-      const sendRetryNotice = async (event: ModelRetryScheduledEvent): Promise<void> => {
+      const sendRetryNotice = async (event: {
+        provider: string;
+        model: string;
+        reason: string;
+        source: "cooldown" | "error";
+        waitMs: number;
+        retryAttempt?: number;
+        maxRetries?: number;
+      }): Promise<void> => {
         if (params.isHeartbeat) {
           return;
         }
@@ -214,12 +219,16 @@ export async function runAgentTurnWithFallback(params: {
           formatDurationCompact(event.waitMs, { spaced: true }) ??
           `${Math.max(1, Math.round(event.waitMs / 1000))}s`;
         const base = `${event.provider}/${event.model}`;
+        const retryLabel =
+          typeof event.retryAttempt === "number" && typeof event.maxRetries === "number"
+            ? ` Retry ${event.retryAttempt}/${event.maxRetries} in ${waitLabel} before fallback.`
+            : ` Retrying in ${waitLabel} before fallback.`;
         const text =
           event.reason === "rate_limit"
             ? `⚠️ ${base} hit a rate limit and is on cooldown${
                 event.source === "cooldown" ? " (all auth profiles cooling down)" : ""
-              }. Retry ${event.retryAttempt}/${event.maxRetries} in ${waitLabel} before fallback.`
-            : `⚠️ ${base} failed (${event.reason}). Retry ${event.retryAttempt}/${event.maxRetries} in ${waitLabel} before fallback.`;
+              }.${retryLabel}`
+            : `⚠️ ${base} failed (${event.reason}).${retryLabel}`;
         if (params.opts?.onBlockReply) {
           await params.opts.onBlockReply({ text });
           return;
@@ -461,6 +470,7 @@ export async function runAgentTurnWithFallback(params: {
                 bootstrapPromptWarningSignaturesSeen[
                   bootstrapPromptWarningSignaturesSeen.length - 1
                 ],
+              onRetryScheduled: sendRetryNotice,
               onToolResult: onToolResult
                 ? (() => {
                     // Serialize tool result delivery to preserve message ordering.
