@@ -721,18 +721,8 @@ describe("runWithModelFallback", () => {
     });
 
     expect(result.result).toBe("ok");
-    expect(run.mock.calls).toEqual([[provider, "m1"]]);
-    expect(onRetryScheduled).toHaveBeenCalledTimes(1);
-    expect(onRetryScheduled.mock.calls[0]?.[0]).toMatchObject({
-      provider,
-      model: "m1",
-      reason: "rate_limit",
-      source: "cooldown",
-      retryAttempt: 1,
-      maxRetries: 1,
-      candidateAttempt: 1,
-      totalCandidates: 1,
-    });
+    expect(run.mock.calls).toEqual([[provider, "m1", { allowTransientCooldownProbe: true }]]);
+    expect(onRetryScheduled).not.toHaveBeenCalled();
   });
 
   it("does not skip OpenRouter when legacy cooldown markers exist", async () => {

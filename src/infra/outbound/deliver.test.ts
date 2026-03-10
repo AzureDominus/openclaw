@@ -15,6 +15,10 @@ import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
 
 const mocks = vi.hoisted(() => ({
   appendAssistantMessageToSessionTranscript: vi.fn(async () => ({ ok: true, sessionFile: "x" })),
+  appendOutboundDeliveryTraceToSessionTranscript: vi.fn(async () => ({
+    ok: true,
+    sessionFile: "x",
+  })),
 }));
 const hookMocks = vi.hoisted(() => ({
   runner: {
@@ -28,6 +32,7 @@ const internalHookMocks = vi.hoisted(() => ({
 }));
 const queueMocks = vi.hoisted(() => ({
   enqueueDelivery: vi.fn(async () => "mock-queue-id"),
+  claimDelivery: vi.fn(async (id: string) => ({ id })),
   ackDelivery: vi.fn(async () => {}),
   failDelivery: vi.fn(async () => {}),
 }));
@@ -42,6 +47,8 @@ vi.mock("../../config/sessions.js", async () => {
   return {
     ...actual,
     appendAssistantMessageToSessionTranscript: mocks.appendAssistantMessageToSessionTranscript,
+    appendOutboundDeliveryTraceToSessionTranscript:
+      mocks.appendOutboundDeliveryTraceToSessionTranscript,
   };
 });
 vi.mock("../../plugins/hook-runner-global.js", () => ({
@@ -53,6 +60,7 @@ vi.mock("../../hooks/internal-hooks.js", () => ({
 }));
 vi.mock("./delivery-queue.js", () => ({
   enqueueDelivery: queueMocks.enqueueDelivery,
+  claimDelivery: queueMocks.claimDelivery,
   ackDelivery: queueMocks.ackDelivery,
   failDelivery: queueMocks.failDelivery,
 }));
@@ -198,6 +206,8 @@ describe("deliverOutboundPayloads", () => {
     internalHookMocks.triggerInternalHook.mockClear();
     queueMocks.enqueueDelivery.mockClear();
     queueMocks.enqueueDelivery.mockResolvedValue("mock-queue-id");
+    queueMocks.claimDelivery.mockClear();
+    queueMocks.claimDelivery.mockImplementation(async (id: string) => ({ id }));
     queueMocks.ackDelivery.mockClear();
     queueMocks.ackDelivery.mockResolvedValue(undefined);
     queueMocks.failDelivery.mockClear();
@@ -789,6 +799,7 @@ describe("deliverOutboundPayloads", () => {
   it("mirrors delivered output when mirror options are provided", async () => {
     const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
     mocks.appendAssistantMessageToSessionTranscript.mockClear();
+    mocks.appendOutboundDeliveryTraceToSessionTranscript.mockClear();
 
     await deliverOutboundPayloads({
       cfg: telegramChunkConfig,
@@ -805,6 +816,17 @@ describe("deliverOutboundPayloads", () => {
 
     expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
       expect.objectContaining({ text: "report.pdf" }),
+    );
+    expect(mocks.appendOutboundDeliveryTraceToSessionTranscript).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:main",
+        trace: expect.objectContaining({
+          channel: "telegram",
+          to: "123",
+          messageId: "m1",
+          content: "caption",
+        }),
+      }),
     );
   });
 

@@ -18,6 +18,7 @@ const ERROR_PATTERNS = {
   ],
   overloaded: [
     /overloaded_error|"type"\s*:\s*"overloaded_error"/i,
+    /"(?:type|code)"\s*:\s*"server_error".*retry your request/i,
     "overloaded",
     // Match "service unavailable" only when combined with an explicit overload
     // indicator — a generic 503 from a proxy/CDN should not be classified as
