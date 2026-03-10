@@ -223,7 +223,7 @@ export function buildGroupChatContext(params: { sessionCtx: TemplateContext }): 
   const lines: string[] = [];
   lines.push(`You are in a ${providerLabel} group chat.`);
   lines.push(
-    "Your replies are automatically sent to this group chat. Do not use the message tool to send to this same group - just reply normally.",
+    "Your replies are automatically sent to this group chat. Do not use the message tool to send to this same group for normal text replies - just reply normally. Exception: if you need to send media such as a browser screenshot or file, use the message tool for that media reply.",
   );
   return lines.join(" ");
 }

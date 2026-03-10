@@ -702,6 +702,9 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("### message tool");
     expect(prompt).toContain("Use `message` for proactive sends + channel actions");
     expect(prompt).toContain("For `action=send`, include `target` and `message`.");
+    expect(prompt).toContain(
+      "Browser screenshots and other tool-generated media are not auto-attached",
+    );
     expect(prompt).toContain(`respond with ONLY: ${SILENT_REPLY_TOKEN}`);
   });
 

@@ -44,7 +44,7 @@ export function registerGroupIntroPromptCases(): void {
           Provider: "whatsapp",
         },
         expected: [
-          "You are in a WhatsApp group chat. Your replies are automatically sent to this group chat. Do not use the message tool to send to this same group - just reply normally.",
+          "You are in a WhatsApp group chat. Your replies are automatically sent to this group chat. Do not use the message tool to send to this same group for normal text replies - just reply normally. Exception: if you need to send media such as a browser screenshot or file, use the message tool for that media reply.",
           `Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included). ${groupParticipationNote} Address the specific sender noted in the message context.`,
         ],
       },
