@@ -201,6 +201,17 @@ describe("routeReply", () => {
     );
   });
 
+  it("strips OPENCLAW_STOP_REASON markers before routing", async () => {
+    mocks.sendMessageSlack.mockClear();
+    await routeReply({
+      payload: { text: "hi\n\nOPENCLAW_STOP_REASON: completed" },
+      channel: "slack",
+      to: "channel:C123",
+      cfg: {} as never,
+    });
+    expect(mocks.sendMessageSlack).toHaveBeenCalledWith("channel:C123", "hi", expect.any(Object));
+  });
+
   it("does not derive responsePrefix from agent identity when routing", async () => {
     mocks.sendMessageSlack.mockClear();
     const cfg = {

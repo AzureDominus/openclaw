@@ -172,6 +172,28 @@ describe("normalizeReplyPayload", () => {
     expect(result!.mediaUrl).toBe("https://example.com/img.png");
   });
 
+  it("strips OPENCLAW_STOP_REASON markers by default", () => {
+    const result = normalizeReplyPayload({
+      text: "All good.\n\nOPENCLAW_STOP_REASON: completed",
+    });
+    expect(result).not.toBeNull();
+    expect(result!.text).toBe("All good.");
+  });
+
+  it("suppresses marker-only OPENCLAW_STOP_REASON payloads", () => {
+    const reasons: string[] = [];
+    const result = normalizeReplyPayload(
+      {
+        text: "OPENCLAW_STOP_REASON: completed",
+      },
+      {
+        onSkip: (reason) => reasons.push(reason),
+      },
+    );
+    expect(result).toBeNull();
+    expect(reasons).toEqual(["empty"]);
+  });
+
   it("can preserve leaked browser drafts when explicitly disabled", () => {
     const normalized = normalizeReplyPayload(
       {
