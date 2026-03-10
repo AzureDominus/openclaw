@@ -41,7 +41,7 @@ export function registerGroupIntroPromptCases(params: {
             },
             expected: [
               '"channel": "discord"',
-              `You are in the Discord group chat "Release Squad". Participants: Alice, Bob.`,
+              `You are in the Discord group chat "Release Squad". Participants: Alice, Bob. Your replies are automatically sent to this group chat. Do not use the message tool to send to this same group for normal text replies — just reply normally. Exception: if you need to send media such as a browser screenshot or file, use the message tool for that media reply.`,
               `Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included). ${groupParticipationNote} Address the specific sender noted in the message context.`,
             ],
           },
@@ -57,7 +57,7 @@ export function registerGroupIntroPromptCases(params: {
             },
             expected: [
               '"channel": "whatsapp"',
-              `You are in the WhatsApp group chat "Ops".`,
+              `You are in the WhatsApp group chat "Ops". Your replies are automatically sent to this group chat. Do not use the message tool to send to this same group for normal text replies — just reply normally. Exception: if you need to send media such as a browser screenshot or file, use the message tool for that media reply.`,
               `WhatsApp IDs: SenderId is the participant JID (group participant id).`,
               `Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included). WhatsApp IDs: SenderId is the participant JID (group participant id). ${groupParticipationNote} Address the specific sender noted in the message context.`,
             ],
@@ -74,7 +74,7 @@ export function registerGroupIntroPromptCases(params: {
             },
             expected: [
               '"channel": "telegram"',
-              `You are in the Telegram group chat "Dev Chat".`,
+              `You are in the Telegram group chat "Dev Chat". Your replies are automatically sent to this group chat. Do not use the message tool to send to this same group for normal text replies — just reply normally. Exception: if you need to send media such as a browser screenshot or file, use the message tool for that media reply.`,
               `Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included). ${groupParticipationNote} Address the specific sender noted in the message context.`,
             ],
           },

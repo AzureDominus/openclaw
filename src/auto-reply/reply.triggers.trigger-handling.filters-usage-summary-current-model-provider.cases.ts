@@ -121,7 +121,7 @@ export function registerTriggerHandlingUsageSummaryCases(params: {
 
           const r1 = await getReplyFromConfig(
             {
-              Body: "/usage",
+              Body: "/usage next",
               From: "+1000",
               To: "+2000",
               Provider: "whatsapp",
@@ -137,7 +137,7 @@ export function registerTriggerHandlingUsageSummaryCases(params: {
 
           const r2 = await getReplyFromConfig(
             {
-              Body: "/usage",
+              Body: "/usage next",
               From: "+1000",
               To: "+2000",
               Provider: "whatsapp",
@@ -153,7 +153,7 @@ export function registerTriggerHandlingUsageSummaryCases(params: {
 
           const r3 = await getReplyFromConfig(
             {
-              Body: "/usage",
+              Body: "/usage next",
               From: "+1000",
               To: "+2000",
               Provider: "whatsapp",
