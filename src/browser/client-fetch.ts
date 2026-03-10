@@ -1,4 +1,3 @@
-import { formatCliCommand } from "../cli/command-format.js";
 import { loadConfig } from "../config/config.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import { extractErrorCode, formatErrorMessage } from "../infra/errors.js";
@@ -99,9 +98,9 @@ function withLoopbackBrowserAuth(
   });
 }
 
-const BROWSER_TOOL_MODEL_HINT =
-  "Do NOT retry the browser tool — it will keep failing. " +
-  "Use an alternative approach or inform the user that the browser is currently unavailable.";
+const BROWSER_TOOL_RETRY_HINT =
+  "The browser tool may have timed out or hit a transient failure. " +
+  "Try the browser step again. If it keeps timing out or failing, ask the user whether to keep trying or use another approach.";
 
 const BROWSER_SERVICE_RATE_LIMIT_MESSAGE =
   "Browser service rate limit reached. " +
@@ -170,25 +169,11 @@ function getBrowserStatusCode(err: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function resolveBrowserFetchOperatorHint(url: string): string {
-  const isLocal = !isAbsoluteHttp(url);
-  return isLocal
-    ? `Restart the OpenClaw gateway (OpenClaw.app menubar, or \`${formatCliCommand("openclaw gateway")}\`).`
-    : "If this is a sandboxed session, ensure the sandbox browser is running.";
-}
-
-function normalizeErrorMessage(err: unknown): string {
-  if (err instanceof Error && err.message.trim().length > 0) {
-    return err.message.trim();
-  }
-  return String(err);
-}
-
 function appendBrowserToolModelHint(message: string): string {
-  if (message.includes(BROWSER_TOOL_MODEL_HINT)) {
+  if (message.includes(BROWSER_TOOL_RETRY_HINT)) {
     return message;
   }
-  return `${message} ${BROWSER_TOOL_MODEL_HINT}`;
+  return `${message} ${BROWSER_TOOL_RETRY_HINT}`;
 }
 
 async function discardResponseBody(res: Response): Promise<void> {
@@ -199,11 +184,51 @@ async function discardResponseBody(res: Response): Promise<void> {
   }
 }
 
-function enhanceDispatcherPathError(url: string, err: unknown): Error {
-  const msg = normalizeErrorMessage(err);
-  const suffix = `${resolveBrowserFetchOperatorHint(url)} ${BROWSER_TOOL_MODEL_HINT}`;
+function enhanceDispatcherPathError(
+  err: unknown,
+  params: { timeoutMs: number; elapsedMs: number; statusCode?: number },
+): Error {
+  const msg = formatErrorMessage(err).trim() || String(err).trim();
+  const msgLower = msg.toLowerCase();
+  const looksLikeTimeout = isLikelyRequestTimeout({
+    msgLower,
+    timeoutMs: params.timeoutMs,
+    elapsedMs: params.elapsedMs,
+  });
+  const retryableStatus =
+    typeof params.statusCode === "number" &&
+    isRetryableBrowserStatusError(params.statusCode, msgLower);
+
+  if (looksLikeTimeout) {
+    const elapsedMs = Math.max(1, Math.round(Math.min(params.elapsedMs, params.timeoutMs)));
+    return new Error(
+      `Browser tool is currently unavailable (timed out after ${elapsedMs}ms). ${BROWSER_TOOL_RETRY_HINT}`,
+      err instanceof Error ? { cause: err } : undefined,
+    );
+  }
+  if (msgLower.includes("browser control disabled")) {
+    return new Error(
+      "Browser tool is disabled in this gateway configuration. " +
+        "Ask the user whether they want to try again later or continue with an alternative approach.",
+      err instanceof Error ? { cause: err } : undefined,
+    );
+  }
+  if (msgLower.includes(PLAYWRIGHT_UNAVAILABLE_MARKER)) {
+    return new Error(
+      "Browser tool appears unavailable after gateway retries. " +
+        "Ask the user whether they want to try the browser step again later or continue with an alternative approach.",
+      err instanceof Error ? { cause: err } : undefined,
+    );
+  }
+  if (retryableStatus) {
+    return new Error(
+      `Browser tool is currently unavailable. ${BROWSER_TOOL_RETRY_HINT} (${msg})`,
+      err instanceof Error ? { cause: err } : undefined,
+    );
+  }
   const normalized = msg.endsWith(".") ? msg : `${msg}.`;
-  return new Error(`${normalized} ${suffix}`, err instanceof Error ? { cause: err } : undefined);
+  const message = appendBrowserToolModelHint(normalized);
+  return new Error(message.trim(), err instanceof Error ? { cause: err } : undefined);
 }
 
 function getNestedErrorCode(err: unknown): string | undefined {
@@ -320,9 +345,7 @@ function enhanceBrowserFetchError(
   const retryableStatus =
     typeof params.statusCode === "number" &&
     isRetryableBrowserStatusError(params.statusCode, msgLower);
-  const retryGuidance =
-    "Do NOT retry the browser tool automatically. " +
-    "Ask the user whether they want to try the browser step again or continue with an alternative approach.";
+  const retryGuidance = BROWSER_TOOL_RETRY_HINT;
 
   if (looksLikeTimeout) {
     const elapsedMs = Math.max(1, Math.round(Math.min(params.elapsedMs, params.timeoutMs)));
@@ -383,7 +406,7 @@ async function fetchHttpJson<T>(
         // Do not reflect upstream response text into the error surface (log/agent injection risk)
         await discardResponseBody(res);
         throw new BrowserServiceError(
-          `${resolveBrowserRateLimitMessage(url)} ${BROWSER_TOOL_MODEL_HINT}`,
+          `${resolveBrowserRateLimitMessage(url)} ${BROWSER_TOOL_RETRY_HINT}`,
         );
       }
       const text = await res.text().catch(() => "");
@@ -495,7 +518,7 @@ async function fetchBrowserJsonInternal<T>(
       if (isRateLimitStatus(result.status)) {
         // Do not reflect upstream response text into the error surface (log/agent injection risk)
         throw new BrowserServiceError(
-          `${resolveBrowserRateLimitMessage(url)} ${BROWSER_TOOL_MODEL_HINT}`,
+          `${resolveBrowserRateLimitMessage(url)} ${BROWSER_TOOL_RETRY_HINT}`,
         );
       }
       const message =
@@ -527,9 +550,9 @@ async function fetchBrowserJsonInternal<T>(
       return await fetchBrowserJsonInternal(url, init, transientRetriesRemaining - 1);
     }
     // Dispatcher-path failures are service-operation failures, not network
-    // reachability failures. Keep the original context, but retain anti-retry hints.
+    // reachability failures. Keep the original context, but add bounded retry guidance.
     if (isDispatcherPath) {
-      throw enhanceDispatcherPathError(url, err);
+      throw enhanceDispatcherPathError(err, { timeoutMs, elapsedMs, statusCode });
     }
     throw enhanceBrowserFetchError(url, err, { timeoutMs, elapsedMs, statusCode });
   }

@@ -145,16 +145,20 @@ describe("fetchBrowserJson loopback auth", () => {
     expect(headers.get("authorization")).toBe("Bearer loopback-token");
   });
 
-  it("preserves dispatcher error context while keeping no-retry hint", async () => {
+  it("preserves dispatcher error context while keeping bounded retry hint", async () => {
     mocks.dispatch.mockRejectedValueOnce(new Error("Chrome CDP handshake timeout"));
 
     await expectThrownBrowserFetchError(() => fetchBrowserJson<{ ok: boolean }>("/tabs"), {
-      contains: ["Chrome CDP handshake timeout", "Do NOT retry the browser tool"],
+      contains: [
+        "Chrome CDP handshake timeout",
+        "Try the browser step again",
+        "If it keeps timing out or failing",
+      ],
       omits: ["Can't reach the OpenClaw browser control service"],
     });
   });
 
-  it("surfaces 429 from HTTP URL as rate-limit error with no-retry hint", async () => {
+  it("surfaces 429 from HTTP URL as rate-limit error with bounded retry hint", async () => {
     const response = new Response("max concurrent sessions exceeded", { status: 429 });
     const text = vi.spyOn(response, "text");
     const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
@@ -166,7 +170,7 @@ describe("fetchBrowserJson loopback auth", () => {
     await expectThrownBrowserFetchError(
       () => fetchBrowserJson<{ ok: boolean }>("http://127.0.0.1:18888/"),
       {
-        contains: ["Browser service rate limit reached", "Do NOT retry the browser tool"],
+        contains: ["Browser service rate limit reached", "Try the browser step again"],
         omits: ["max concurrent sessions exceeded"],
       },
     );
@@ -183,7 +187,7 @@ describe("fetchBrowserJson loopback auth", () => {
     await expectThrownBrowserFetchError(
       () => fetchBrowserJson<{ ok: boolean }>("http://127.0.0.1:18888/"),
       {
-        contains: ["rate limit reached", "Do NOT retry the browser tool"],
+        contains: ["rate limit reached", "Try the browser step again"],
       },
     );
   });
@@ -225,7 +229,7 @@ describe("fetchBrowserJson loopback auth", () => {
     });
 
     await expectThrownBrowserFetchError(() => fetchBrowserJson<{ ok: boolean }>("/tabs"), {
-      contains: ["Browser service rate limit reached", "Do NOT retry the browser tool"],
+      contains: ["Browser service rate limit reached", "Try the browser step again"],
       omits: ["too many sessions"],
     });
   });
@@ -241,10 +245,7 @@ describe("fetchBrowserJson loopback auth", () => {
     await expectThrownBrowserFetchError(
       () => fetchBrowserJson<{ ok: boolean }>("http://example.com/"),
       {
-        contains: [
-          "Can't reach the OpenClaw browser control service",
-          "Do NOT retry the browser tool",
-        ],
+        contains: ["Browser tool is currently unavailable", "Try the browser step again"],
       },
     );
   });
