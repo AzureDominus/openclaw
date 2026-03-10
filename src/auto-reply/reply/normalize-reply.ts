@@ -70,7 +70,7 @@ export function normalizeReplyPayload(
     text = "";
   }
 
-  if (text && (opts?.stripStopReasonMarker ?? false)) {
+  if (text && (opts?.stripStopReasonMarker ?? true)) {
     text = stripDeclaredStopReasonLine(text);
   }
 

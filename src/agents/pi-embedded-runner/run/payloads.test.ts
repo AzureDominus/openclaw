@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buildPayloads, expectSingleToolErrorPayload } from "./payloads.test-helpers.js";
+import {
+  buildPayloads,
+  expectSinglePayloadText,
+  expectSingleToolErrorPayload,
+} from "./payloads.test-helpers.js";
 
 describe("buildEmbeddedRunPayloads tool-error warnings", () => {
   it("suppresses exec tool errors when verbose mode is off", () => {
@@ -90,5 +94,13 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
 
     expect(payloads).toHaveLength(0);
+  });
+
+  it("strips OPENCLAW_STOP_REASON markers from assistant payload text", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Config repo still looks weird.\n\nOPENCLAW_STOP_REASON: completed"],
+    });
+
+    expectSinglePayloadText(payloads, "Config repo still looks weird.");
   });
 });

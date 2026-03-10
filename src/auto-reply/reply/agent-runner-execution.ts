@@ -18,6 +18,7 @@ import {
   sanitizeUserFacingText,
 } from "../../agents/pi-embedded-helpers.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
+import { stripDeclaredStopReasonLine } from "../../agents/stop-reason.js";
 import {
   resolveGroupSessionKey,
   resolveSessionTranscriptPath,
@@ -167,6 +168,9 @@ export async function runAgentTurnWithFallback(params: {
         }
         if (isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
           return { skip: true };
+        }
+        if (text) {
+          text = stripDeclaredStopReasonLine(text);
         }
         if (
           isSilentReplyPrefixText(text, SILENT_REPLY_TOKEN) ||
@@ -366,6 +370,7 @@ export async function runAgentTurnWithFallback(params: {
                 return isMarkdownCapableMessageChannel(channel) ? "markdown" : "plain";
               })(),
               suppressToolErrorWarnings: params.opts?.suppressToolErrorWarnings,
+              disableMessageTool: params.isHeartbeat,
               bootstrapContextMode: params.opts?.bootstrapContextMode,
               bootstrapContextRunKind: params.opts?.isHeartbeat ? "heartbeat" : "default",
               images: params.opts?.images,
