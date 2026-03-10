@@ -76,7 +76,7 @@ describe("browser fetch error classification", () => {
     }
   });
 
-  it("uses user-confirmation guidance for timeouts", async () => {
+  it("uses bounded retry guidance for timeouts", async () => {
     mocks.dispatch.mockImplementation(async () => await new Promise(() => {}));
 
     try {
@@ -85,14 +85,15 @@ describe("browser fetch error classification", () => {
     } catch (err) {
       const msg = String(err);
       expect(msg).toContain("Browser tool is currently unavailable (timed out after 10ms)");
-      expect(msg).toContain("Ask the user whether they want to try the browser step again");
+      expect(msg).toContain("Try the browser step again");
+      expect(msg).toContain("If it keeps timing out or failing");
       expect(msg).not.toContain("Restart");
     }
 
     expect(mocks.dispatch).toHaveBeenCalledTimes(4);
   });
 
-  it("uses user-confirmation guidance for connectivity errors", async () => {
+  it("uses bounded retry guidance for connectivity errors", async () => {
     const connectivityErr = new TypeError("fetch failed") as TypeError & {
       cause?: { code?: string };
     };
@@ -108,7 +109,8 @@ describe("browser fetch error classification", () => {
     } catch (err) {
       const msg = String(err);
       expect(msg).toContain("Browser tool is currently unavailable.");
-      expect(msg).toContain("Ask the user whether they want to try the browser step again");
+      expect(msg).toContain("Try the browser step again");
+      expect(msg).toContain("If it keeps timing out or failing");
       expect(msg).not.toContain("Restart");
     }
 
