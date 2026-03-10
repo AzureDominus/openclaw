@@ -96,8 +96,7 @@ export type ModelRetryScheduledEvent = {
 const DEFAULT_MODEL_RETRY_INITIAL_BACKOFF_SECONDS = 60;
 const DEFAULT_MODEL_RETRY_BACKOFF_FACTOR = 2;
 const DEFAULT_MODEL_RETRY_MAX_BACKOFF_SECONDS = 10 * 60;
-const DEFAULT_MODEL_RETRY_REASONS = new Set<FailoverReason>(["rate_limit"]);
-
+const DEFAULT_MODEL_RETRY_REASONS = new Set<FailoverReason>(["rate_limit", "overloaded"]);
 /**
  * Fallback abort check. Only treats explicit AbortError names as user aborts.
  * Message-based checks (e.g., "aborted") can mask timeouts and skip fallback.
@@ -450,6 +449,7 @@ function normalizeRetryReasons(value: unknown): Set<FailoverReason> {
       item === "auth" ||
       item === "format" ||
       item === "rate_limit" ||
+      item === "overloaded" ||
       item === "billing" ||
       item === "timeout" ||
       item === "unknown"
