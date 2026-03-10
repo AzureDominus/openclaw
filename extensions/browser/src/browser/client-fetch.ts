@@ -99,9 +99,9 @@ function withLoopbackBrowserAuth(
   });
 }
 
-const BROWSER_TOOL_MODEL_HINT =
-  "Do NOT retry the browser tool — it will keep failing. " +
-  "Use an alternative approach or inform the user that the browser is currently unavailable.";
+const BROWSER_TOOL_RETRY_HINT =
+  "The browser tool may have timed out or hit a transient failure. " +
+  "Try the browser step again. If it keeps timing out or failing, ask the user whether to keep trying or use another approach.";
 
 function isRateLimitStatus(status: number): boolean {
   return status === 429;
@@ -191,11 +191,11 @@ function normalizeErrorMessage(err: unknown): string {
   return String(err);
 }
 
-function appendBrowserToolModelHint(message: string): string {
-  if (message.includes(BROWSER_TOOL_MODEL_HINT)) {
+function appendBrowserToolRetryHint(message: string): string {
+  if (message.includes(BROWSER_TOOL_RETRY_HINT)) {
     return message;
   }
-  return `${message} ${BROWSER_TOOL_MODEL_HINT}`;
+  return `${message} ${BROWSER_TOOL_RETRY_HINT}`;
 }
 
 type BrowserFetchFailureKind = "timeout" | "aborted" | "persistent";
@@ -233,7 +233,7 @@ function enhanceDispatcherPathError(url: string, err: unknown): Error {
   const ownership = resolveDispatcherBrowserControlOwnership(url);
   const operatorHint = resolveBrowserFetchOperatorHint(url, { ownership });
   const suffix =
-    kind === "persistent" ? `${operatorHint} ${BROWSER_TOOL_MODEL_HINT}` : operatorHint;
+    kind === "persistent" ? `${operatorHint} ${BROWSER_TOOL_RETRY_HINT}` : operatorHint;
   const normalized = msg.endsWith(".") ? msg : `${msg}.`;
   return new Error(`${normalized} ${suffix}`, err instanceof Error ? { cause: err } : undefined);
 }
@@ -353,14 +353,12 @@ function enhanceBrowserFetchError(
   const retryableStatus =
     typeof params.statusCode === "number" &&
     isRetryableBrowserStatusError(params.statusCode, msgLower);
-  const retryGuidance =
-    "Do NOT retry the browser tool automatically. " +
-    "Ask the user whether they want to try the browser step again or continue with an alternative approach.";
+  const retryGuidance = BROWSER_TOOL_RETRY_HINT;
 
   if (looksLikeTimeout) {
     const elapsedMs = Math.max(1, Math.round(Math.min(params.elapsedMs, params.timeoutMs)));
     return new Error(
-      appendBrowserToolModelHint(
+      appendBrowserToolRetryHint(
         `Browser tool is currently unavailable (timed out after ${elapsedMs}ms). ${operatorHint} ${retryGuidance}`,
       ),
       err instanceof Error ? { cause: err } : undefined,
@@ -368,7 +366,7 @@ function enhanceBrowserFetchError(
   }
   if (msgLower.includes("browser control disabled")) {
     return new Error(
-      appendBrowserToolModelHint(
+      appendBrowserToolRetryHint(
         "Browser tool is disabled in this gateway configuration. " +
           "Ask the user whether they want to try again later or continue with an alternative approach.",
       ),
@@ -377,7 +375,7 @@ function enhanceBrowserFetchError(
   }
   if (msgLower.includes(PLAYWRIGHT_UNAVAILABLE_MARKER)) {
     return new Error(
-      appendBrowserToolModelHint(
+      appendBrowserToolRetryHint(
         "Browser tool appears unavailable after gateway retries. " +
           "Ask the user whether they want to try the browser step again later or continue with an alternative approach.",
       ),
@@ -386,7 +384,7 @@ function enhanceBrowserFetchError(
   }
   if (looksLikeConnectivity || retryableStatus) {
     return new Error(
-      appendBrowserToolModelHint(
+      appendBrowserToolRetryHint(
         `Browser tool is currently unavailable. ${operatorHint} ${retryGuidance} (${msg})`,
       ),
       err instanceof Error ? { cause: err } : undefined,
@@ -433,7 +431,7 @@ async function fetchHttpJson<T>(
         // Do not reflect upstream response text into the error surface (log/agent injection risk)
         await discardResponseBody(res);
         throw new BrowserServiceError(
-          `${resolveBrowserRateLimitMessage(url)} ${BROWSER_TOOL_MODEL_HINT}`,
+          `${resolveBrowserRateLimitMessage(url)} ${BROWSER_TOOL_RETRY_HINT}`,
         );
       }
       const text = await res.text().catch(() => "");
@@ -542,7 +540,7 @@ async function fetchBrowserJsonInternal<T>(
       if (isRateLimitStatus(result.status)) {
         // Do not reflect upstream response text into the error surface (log/agent injection risk)
         throw new BrowserServiceError(
-          `${resolveBrowserRateLimitMessage(url)} ${BROWSER_TOOL_MODEL_HINT}`,
+          `${resolveBrowserRateLimitMessage(url)} ${BROWSER_TOOL_RETRY_HINT}`,
         );
       }
       const message =
@@ -574,7 +572,7 @@ async function fetchBrowserJsonInternal<T>(
       return await fetchBrowserJsonInternal(url, init, transientRetriesRemaining - 1);
     }
     // Dispatcher-path failures are service-operation failures, not network
-    // reachability failures. Keep the original context, but retain anti-retry hints.
+    // reachability failures. Keep the original context, but add bounded retry guidance.
     if (isDispatcherPath) {
       throw enhanceDispatcherPathError(url, err);
     }

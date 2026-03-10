@@ -198,21 +198,21 @@ describe("fetchBrowserJson loopback auth", () => {
     expect(headers.get("authorization")).toBe("Bearer loopback-token");
   });
 
-  it("preserves dispatcher timeout context without no-retry hint", async () => {
+  it("preserves dispatcher timeout context without bounded retry guidance", async () => {
     mocks.dispatch.mockRejectedValueOnce(new Error("Chrome CDP handshake timeout"));
 
     await expectThrownBrowserFetchError(() => fetchBrowserJson<{ ok: boolean }>("/tabs"), {
       contains: ["Chrome CDP handshake timeout", "Restart the OpenClaw gateway"],
-      omits: ["Can't reach the OpenClaw browser control service", "Do NOT retry the browser tool"],
+      omits: ["Can't reach the OpenClaw browser control service"],
     });
   });
 
-  it("preserves dispatcher abort context without no-retry hint", async () => {
+  it("preserves dispatcher abort context without bounded retry guidance", async () => {
     mocks.dispatch.mockRejectedValueOnce(new DOMException("operation aborted", "AbortError"));
 
     await expectThrownBrowserFetchError(() => fetchBrowserJson<{ ok: boolean }>("/tabs"), {
       contains: ["operation aborted", "Restart the OpenClaw gateway"],
-      omits: ["Do NOT retry the browser tool"],
+      omits: ["Try the browser step again"],
     });
   });
 
@@ -240,7 +240,7 @@ describe("fetchBrowserJson loopback auth", () => {
           "browser profile is external to OpenClaw",
           "Restarting the OpenClaw gateway will not launch it",
         ],
-        omits: ["Restart the OpenClaw gateway", "Do NOT retry the browser tool"],
+        omits: ["Restart the OpenClaw gateway"],
       },
     );
   });
@@ -266,7 +266,7 @@ describe("fetchBrowserJson loopback auth", () => {
         "browser profile is external to OpenClaw",
         "Restarting the OpenClaw gateway will not launch it",
       ],
-      omits: ["Restart the OpenClaw gateway", "Do NOT retry the browser tool"],
+      omits: ["Restart the OpenClaw gateway"],
     });
   });
 
@@ -292,7 +292,7 @@ describe("fetchBrowserJson loopback auth", () => {
           "browser profile is external to OpenClaw",
           "Restarting the OpenClaw gateway will not launch it",
         ],
-        omits: ["Restart the OpenClaw gateway", "Do NOT retry the browser tool"],
+        omits: ["Restart the OpenClaw gateway"],
       },
     );
   });
@@ -315,7 +315,7 @@ describe("fetchBrowserJson loopback auth", () => {
       () => fetchBrowserJson<{ ok: boolean }>("/tabs?profile=openclaw"),
       {
         contains: ["Chrome CDP handshake timeout", "Restart the OpenClaw gateway"],
-        omits: ["browser profile is external to OpenClaw", "Do NOT retry the browser tool"],
+        omits: ["browser profile is external to OpenClaw"],
       },
     );
   });
@@ -330,7 +330,7 @@ describe("fetchBrowserJson loopback auth", () => {
       () => fetchBrowserJson<{ ok: boolean }>("/tabs?profile=manual"),
       {
         contains: ["Chrome CDP handshake timeout", "Restart the OpenClaw gateway"],
-        omits: ["browser profile is external to OpenClaw", "Do NOT retry the browser tool"],
+        omits: ["browser profile is external to OpenClaw"],
       },
     );
   });
@@ -353,7 +353,7 @@ describe("fetchBrowserJson loopback auth", () => {
       () => fetchBrowserJson<{ ok: boolean }>("/tabs?profile=missing"),
       {
         contains: ["Chrome CDP handshake timeout", "Restart the OpenClaw gateway"],
-        omits: ["browser profile is external to OpenClaw", "Do NOT retry the browser tool"],
+        omits: ["browser profile is external to OpenClaw"],
       },
     );
   });
@@ -379,11 +379,11 @@ describe("fetchBrowserJson loopback auth", () => {
         "browser profile is external to OpenClaw",
         "Restarting the OpenClaw gateway will not launch it",
       ],
-      omits: ["Restart the OpenClaw gateway", "Do NOT retry the browser tool"],
+      omits: ["Restart the OpenClaw gateway"],
     });
   });
 
-  it("keeps no-retry hint but not restart guidance for persistent external profile failures", async () => {
+  it("keeps bounded retry guidance but not restart guidance for persistent external profile failures", async () => {
     mocks.loadConfig.mockReturnValue({
       browser: {
         attachOnly: true,
@@ -405,23 +405,23 @@ describe("fetchBrowserJson loopback auth", () => {
         contains: [
           "Chrome CDP connection refused",
           "browser profile is external to OpenClaw",
-          "Do NOT retry the browser tool",
+          "Try the browser step again",
         ],
         omits: ["Restart the OpenClaw gateway"],
       },
     );
   });
 
-  it("keeps no-retry hint for persistent dispatcher failures", async () => {
+  it("keeps bounded retry guidance for persistent dispatcher failures", async () => {
     mocks.dispatch.mockRejectedValueOnce(new Error("Chrome CDP connection refused"));
 
     await expectThrownBrowserFetchError(() => fetchBrowserJson<{ ok: boolean }>("/tabs"), {
-      contains: ["Chrome CDP connection refused", "Do NOT retry the browser tool"],
+      contains: ["Chrome CDP connection refused", "Try the browser step again"],
       omits: ["Can't reach the OpenClaw browser control service"],
     });
   });
 
-  it("surfaces 429 from HTTP URL as rate-limit error with no-retry hint", async () => {
+  it("surfaces 429 from HTTP URL as rate-limit error with bounded retry guidance", async () => {
     const response = new Response("max concurrent sessions exceeded", { status: 429 });
     const text = vi.spyOn(response, "text");
     const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
@@ -433,7 +433,7 @@ describe("fetchBrowserJson loopback auth", () => {
     await expectThrownBrowserFetchError(
       () => fetchBrowserJson<{ ok: boolean }>("http://127.0.0.1:18888/"),
       {
-        contains: ["Browser service rate limit reached", "Do NOT retry the browser tool"],
+        contains: ["Browser service rate limit reached", "Try the browser step again"],
         omits: ["max concurrent sessions exceeded"],
       },
     );
@@ -450,7 +450,7 @@ describe("fetchBrowserJson loopback auth", () => {
     await expectThrownBrowserFetchError(
       () => fetchBrowserJson<{ ok: boolean }>("http://127.0.0.1:18888/"),
       {
-        contains: ["rate limit reached", "Do NOT retry the browser tool"],
+        contains: ["rate limit reached", "Try the browser step again"],
       },
     );
   });
@@ -492,7 +492,7 @@ describe("fetchBrowserJson loopback auth", () => {
     });
 
     await expectThrownBrowserFetchError(() => fetchBrowserJson<{ ok: boolean }>("/tabs"), {
-      contains: ["Browser service rate limit reached", "Do NOT retry the browser tool"],
+      contains: ["Browser service rate limit reached", "Try the browser step again"],
       omits: ["too many sessions"],
     });
   });
@@ -510,13 +510,13 @@ describe("fetchBrowserJson loopback auth", () => {
       {
         contains: [
           "Can't reach the OpenClaw browser control service",
-          "Do NOT retry the browser tool",
+          "Try the browser step again",
         ],
       },
     );
   });
 
-  it("omits no-retry hint for absolute HTTP timeout failures", async () => {
+  it("uses bounded retry guidance for absolute HTTP timeout failures", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => {
@@ -527,13 +527,12 @@ describe("fetchBrowserJson loopback auth", () => {
     await expectThrownBrowserFetchError(
       () => fetchBrowserJson<{ ok: boolean }>("http://example.com/", { timeoutMs: 1234 }),
       {
-        contains: ["timed out after 1234ms"],
-        omits: ["Do NOT retry the browser tool"],
+        contains: ["timed out after 1234ms", "Try the browser step again"],
       },
     );
   });
 
-  it("omits no-retry hint for absolute HTTP abort failures", async () => {
+  it("omits bounded retry guidance for absolute HTTP abort failures", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => {
@@ -545,7 +544,7 @@ describe("fetchBrowserJson loopback auth", () => {
       () => fetchBrowserJson<{ ok: boolean }>("http://example.com/"),
       {
         contains: ["Browser control request was cancelled"],
-        omits: ["Do NOT retry the browser tool"],
+        omits: ["Try the browser step again"],
       },
     );
   });
