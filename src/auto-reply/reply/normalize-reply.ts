@@ -1,4 +1,5 @@
 import { sanitizeUserFacingText } from "../../agents/pi-embedded-helpers/sanitize-user-facing-text.js";
+import { stripDeclaredStopReasonLine } from "../../agents/stop-reason.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
@@ -26,6 +27,8 @@ export type NormalizeReplyOptions = {
   responsePrefixContext?: ResponsePrefixContext;
   onHeartbeatStrip?: () => void;
   stripHeartbeat?: boolean;
+  /** Strip OPENCLAW_STOP_REASON marker lines before delivery. */
+  stripStopReasonMarker?: boolean;
   silentToken?: string;
   transformReplyPayload?: (payload: ReplyPayload) => ReplyPayload | null;
   onSkip?: (reason: NormalizeReplySkipReason) => void;
@@ -80,6 +83,10 @@ export function normalizeReplyPayload(
   if (text && !trimmed) {
     // Keep empty text when media exists so media-only replies still send.
     text = "";
+  }
+
+  if (text && (opts?.stripStopReasonMarker ?? false)) {
+    text = stripDeclaredStopReasonLine(text);
   }
 
   const shouldStripHeartbeat = opts.stripHeartbeat ?? true;
