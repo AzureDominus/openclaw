@@ -1292,6 +1292,7 @@
     "./cli-entry": "./openclaw.mjs"
   },
   "scripts": {
+    "agent-chat-editor": "node --import tsx scripts/agent-chat-editor.ts",
     "android:assemble": "cd apps/android && ./gradlew :app:assemblePlayDebug",
     "android:assemble:third-party": "cd apps/android && ./gradlew :app:assembleThirdPartyDebug",
     "android:bundle:release": "bun apps/android/scripts/build-release-aab.ts",
@@ -1644,6 +1645,7 @@
     "commander": "^14.0.3",
     "croner": "^10.0.1",
     "dotenv": "^17.4.2",
+    "express": "^5.2.1",
     "file-type": "22.0.1",
     "https-proxy-agent": "^9.0.0",
     "ipaddr.js": "^2.3.0",
@@ -1658,8 +1660,8 @@
     "playwright-core": "npm:patchright@1.57.0",
     "proxy-agent": "^8.0.1",
     "qrcode-terminal": "^0.12.0",
-    "sharp": "^0.34.5",
     "semver": "7.7.4",
+    "sharp": "^0.34.5",
     "sqlite-vec": "0.1.9",
     "tar": "7.5.13",
     "tslog": "^4.10.2",
