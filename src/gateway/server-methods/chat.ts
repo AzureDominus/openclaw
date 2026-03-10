@@ -1228,6 +1228,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         p.thinking && trimmedMessage && !trimmedMessage.startsWith("/"),
       );
       const commandBody = injectThinking ? `/think ${p.thinking} ${parsedMessage}` : parsedMessage;
+      const isGatewayControlCommand = isControlCommandMessage(commandBody, cfg);
       const messageForAgent = systemProvenanceReceipt
         ? [systemProvenanceReceipt, parsedMessage].filter(Boolean).join("\n\n")
         : parsedMessage;
