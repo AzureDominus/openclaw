@@ -1,9 +1,13 @@
 import "./run.overflow-compaction.mocks.shared.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../../utils.js", () => ({
-  resolveUserPath: vi.fn((p: string) => p),
-}));
+vi.mock("../../utils.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../utils.js")>();
+  return {
+    ...actual,
+    resolveUserPath: vi.fn((p: string) => p),
+  };
+});
 
 vi.mock("../pi-embedded-helpers.js", async () => {
   return {

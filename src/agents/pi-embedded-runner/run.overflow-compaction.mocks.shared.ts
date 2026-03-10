@@ -28,9 +28,14 @@ export const mockedGlobalHookRunner = {
   ),
 };
 
-vi.mock("../../plugins/hook-runner-global.js", () => ({
-  getGlobalHookRunner: vi.fn(() => mockedGlobalHookRunner),
-}));
+vi.mock("../../plugins/hook-runner-global.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../plugins/hook-runner-global.js")>();
+  return {
+    ...actual,
+    initializeGlobalHookRunner: vi.fn(),
+    getGlobalHookRunner: vi.fn(() => mockedGlobalHookRunner),
+  };
+});
 
 vi.mock("../auth-profiles.js", () => ({
   isProfileInCooldown: vi.fn(() => false),
