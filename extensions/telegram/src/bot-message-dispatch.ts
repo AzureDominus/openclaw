@@ -597,15 +597,18 @@ export const dispatchTelegramMessage = async ({
   };
 
   const resolvedBlockStreamingEnabled = resolveChannelStreamingBlockEnabled(telegramCfg);
-  const disableBlockStreaming = !previewStreamingEnabled
-    ? true
-    : forceBlockStreamingForReasoning
+  // `streamMode: off` disables preview editing, but progress/block replies
+  // still need to flow so continue-guard checkpoints remain visible.
+  const disableBlockStreaming =
+    streamMode === "off"
       ? false
-      : typeof resolvedBlockStreamingEnabled === "boolean"
-        ? !resolvedBlockStreamingEnabled
-        : canStreamAnswerDraft
-          ? true
-          : undefined;
+      : forceBlockStreamingForReasoning
+        ? false
+        : typeof resolvedBlockStreamingEnabled === "boolean"
+          ? !resolvedBlockStreamingEnabled
+          : canStreamAnswerDraft
+            ? true
+            : undefined;
 
   const chunkMode = resolveChunkMode(cfg, "telegram", route.accountId);
   const shouldSupersedeAbortFence =

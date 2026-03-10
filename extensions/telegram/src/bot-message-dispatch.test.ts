@@ -1115,10 +1115,14 @@ describe("dispatchTelegramMessage draft streaming", () => {
   it.each([
     { label: "default account config", telegramCfg: {} },
     {
-      label: "account blockStreaming override",
+      label: "account blockStreaming disabled",
+      telegramCfg: { streaming: { block: { enabled: false } } },
+    },
+    {
+      label: "account blockStreaming enabled",
       telegramCfg: { streaming: { block: { enabled: true } } },
     },
-  ])("disables block streaming when streamMode is off ($label)", async ({ telegramCfg }) => {
+  ])("keeps block streaming enabled when streamMode is off ($label)", async ({ telegramCfg }) => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
       return { queuedFinal: true };
@@ -1135,7 +1139,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
       expect.objectContaining({
         replyOptions: expect.objectContaining({
-          disableBlockStreaming: true,
+          disableBlockStreaming: false,
         }),
       }),
     );
