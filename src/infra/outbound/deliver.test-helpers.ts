@@ -19,6 +19,10 @@ type DeliverMockState = {
       ok: boolean;
       sessionFile: string;
     }>;
+    appendOutboundDeliveryTraceToSessionTranscript: (...args: unknown[]) => Promise<{
+      ok: boolean;
+      sessionFile: string;
+    }>;
   };
   hooks: {
     runner: {
@@ -32,6 +36,7 @@ type DeliverMockState = {
   };
   queue: {
     enqueueDelivery: (...args: unknown[]) => Promise<string>;
+    claimDelivery: (...args: unknown[]) => Promise<{ id: string }>;
     ackDelivery: (...args: unknown[]) => Promise<void>;
     failDelivery: (...args: unknown[]) => Promise<void>;
   };
@@ -43,6 +48,10 @@ type DeliverMockState = {
 export const deliverMocks: DeliverMockState = {
   sessions: {
     appendAssistantMessageToSessionTranscript: async () => ({ ok: true, sessionFile: "x" }),
+    appendOutboundDeliveryTraceToSessionTranscript: async () => ({
+      ok: true,
+      sessionFile: "x",
+    }),
   },
   hooks: {
     runner: {
@@ -56,6 +65,7 @@ export const deliverMocks: DeliverMockState = {
   },
   queue: {
     enqueueDelivery: async () => "mock-queue-id",
+    claimDelivery: async (id: unknown) => ({ id: String(id) }),
     ackDelivery: async () => {},
     failDelivery: async () => {},
   },
@@ -67,6 +77,9 @@ export const deliverMocks: DeliverMockState = {
 const _mocks = vi.hoisted(() => ({
   appendAssistantMessageToSessionTranscript: vi.fn(async () =>
     deliverMocks.sessions.appendAssistantMessageToSessionTranscript(),
+  ),
+  appendOutboundDeliveryTraceToSessionTranscript: vi.fn(async (...args: unknown[]) =>
+    deliverMocks.sessions.appendOutboundDeliveryTraceToSessionTranscript(...args),
   ),
 }));
 const _hookMocks = vi.hoisted(() => ({
@@ -89,6 +102,7 @@ const _queueMocks = vi.hoisted(() => ({
   enqueueDelivery: vi.fn(
     async (...args: unknown[]) => await deliverMocks.queue.enqueueDelivery(...args),
   ),
+  claimDelivery: vi.fn(async (...args: unknown[]) => await deliverMocks.queue.claimDelivery(...args)),
   ackDelivery: vi.fn(async (...args: unknown[]) => await deliverMocks.queue.ackDelivery(...args)),
   failDelivery: vi.fn(async (...args: unknown[]) => await deliverMocks.queue.failDelivery(...args)),
 }));
@@ -109,6 +123,8 @@ vi.mock("../../config/sessions.js", async () => {
   return {
     ...actual,
     appendAssistantMessageToSessionTranscript: _mocks.appendAssistantMessageToSessionTranscript,
+    appendOutboundDeliveryTraceToSessionTranscript:
+      _mocks.appendOutboundDeliveryTraceToSessionTranscript,
   };
 });
 vi.mock("../../plugins/hook-runner-global.js", () => ({
@@ -120,6 +136,7 @@ vi.mock("../../hooks/internal-hooks.js", () => ({
 }));
 vi.mock("./delivery-queue.js", () => ({
   enqueueDelivery: _queueMocks.enqueueDelivery,
+  claimDelivery: _queueMocks.claimDelivery,
   ackDelivery: _queueMocks.ackDelivery,
   failDelivery: _queueMocks.failDelivery,
 }));
@@ -181,10 +198,15 @@ export function resetDeliverTestState() {
   deliverMocks.internalHooks.createInternalHookEvent = createInternalHookEventPayload;
   deliverMocks.internalHooks.triggerInternalHook = async () => {};
   deliverMocks.queue.enqueueDelivery = async () => "mock-queue-id";
+  deliverMocks.queue.claimDelivery = async (id: unknown) => ({ id: String(id) });
   deliverMocks.queue.ackDelivery = async () => {};
   deliverMocks.queue.failDelivery = async () => {};
   deliverMocks.log.warn = () => {};
   deliverMocks.sessions.appendAssistantMessageToSessionTranscript = async () => ({
+    ok: true,
+    sessionFile: "x",
+  });
+  deliverMocks.sessions.appendOutboundDeliveryTraceToSessionTranscript = async () => ({
     ok: true,
     sessionFile: "x",
   });
@@ -200,11 +222,13 @@ export function resetDeliverTestMocks(params?: { includeSessionMocks?: boolean }
   internalHookMocks.createInternalHookEvent.mockClear();
   internalHookMocks.triggerInternalHook.mockClear();
   queueMocks.enqueueDelivery.mockClear();
+  queueMocks.claimDelivery.mockClear();
   queueMocks.ackDelivery.mockClear();
   queueMocks.failDelivery.mockClear();
   logMocks.warn.mockClear();
   if (params?.includeSessionMocks) {
     mocks.appendAssistantMessageToSessionTranscript.mockClear();
+    mocks.appendOutboundDeliveryTraceToSessionTranscript.mockClear();
   }
 }
 

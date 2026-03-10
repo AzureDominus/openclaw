@@ -826,6 +826,11 @@ describe("classifyFailoverReason", () => {
         '{"error":{"code":503,"message":"The model is overloaded. Please try later","status":"UNAVAILABLE"}}',
       ),
     ).toBe("overloaded");
+    expect(
+      classifyFailoverReason(
+        'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request. You can retry your request, or contact us through our help center at help.openai.com if the error persists.","param":null},"sequence_number":2}',
+      ),
+    ).toBe("overloaded");
   });
   it("classifies bare 'service unavailable' as timeout instead of rate_limit (#32828)", () => {
     // A generic "service unavailable" from a proxy/CDN should stay retryable,
