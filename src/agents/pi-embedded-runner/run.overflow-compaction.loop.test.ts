@@ -1,5 +1,10 @@
 import "./run.overflow-compaction.mocks.shared.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  classifyFailoverReason,
+  formatAssistantErrorText,
+  isFailoverAssistantError,
+} from "../pi-embedded-helpers.js";
 
 vi.mock("../../utils.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../utils.js")>();
@@ -85,6 +90,9 @@ const baseParams = {
 describe("overflow compaction in run loop", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(classifyFailoverReason).mockReturnValue(null);
+    vi.mocked(formatAssistantErrorText).mockReturnValue("");
+    vi.mocked(isFailoverAssistantError).mockReturnValue(false);
     mockedRunEmbeddedAttempt.mockReset();
     mockedBuildEmbeddedRunPayloads.mockReset();
     mockedCompactDirect.mockReset();
@@ -97,6 +105,51 @@ describe("overflow compaction in run loop", () => {
       truncatedCount: 0,
       reason: "no oversized tool results",
     });
+  });
+
+  it("surfaces a retry notice for inner overloaded failover retries", async () => {
+    vi.mocked(isFailoverAssistantError).mockReturnValue(true);
+    vi.mocked(classifyFailoverReason).mockReturnValue("overloaded");
+    vi.mocked(formatAssistantErrorText).mockReturnValue(
+      "The AI service is temporarily overloaded. Please try again in a moment.",
+    );
+
+    const onRetryScheduled = vi.fn();
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        lastAssistant: {
+          errorMessage:
+            'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request. You can retry your request."}}',
+        } as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    await expect(
+      runEmbeddedPiAgent({
+        ...baseParams,
+        config: {
+          agents: {
+            defaults: {
+              model: {
+                fallbacks: ["anthropic/test-fallback"],
+              },
+            },
+          },
+        } as never,
+        onRetryScheduled,
+      }),
+    ).rejects.toThrow("The AI service is temporarily overloaded. Please try again in a moment.");
+
+    expect(onRetryScheduled).toHaveBeenCalledTimes(1);
+    expect(onRetryScheduled).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "anthropic",
+        model: "test-model",
+        reason: "overloaded",
+        source: "error",
+        retryAttempt: 1,
+      }),
+    );
   });
 
   it("retries after successful compaction on context overflow promptError", async () => {

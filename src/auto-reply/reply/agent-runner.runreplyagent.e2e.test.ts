@@ -22,6 +22,15 @@ type AgentRunParams = {
   onReasoningStream?: (payload: { text?: string }) => Promise<void> | void;
   onBlockReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
   onToolResult?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
+  onRetryScheduled?: (event: {
+    provider: string;
+    model: string;
+    reason: string;
+    source: "cooldown" | "error";
+    waitMs: number;
+    retryAttempt?: number;
+    maxRetries?: number;
+  }) => Promise<void> | void;
   onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void;
 };
 
@@ -609,6 +618,34 @@ describe("runReplyAgent typing (heartbeat)", () => {
         expect(onToolResult).not.toHaveBeenCalled();
       }
     }
+  });
+
+  it("surfaces inner runner retry notices through block replies", async () => {
+    const onBlockReply = vi.fn();
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      await params.onRetryScheduled?.({
+        provider: "openai-codex",
+        model: "gpt-5.4",
+        reason: "overloaded",
+        source: "error",
+        waitMs: 1250,
+      });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const { run } = createMinimalRun({
+      typingMode: "message",
+      blockStreamingEnabled: true,
+      opts: { onBlockReply },
+      runOverrides: { provider: "openai-codex", model: "gpt-5.4" },
+    });
+    await run();
+
+    expect(onBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "⚠️ openai-codex/gpt-5.4 failed (overloaded). Retrying in 1s before fallback.",
+      }),
+    );
   });
 
   it("retries transient HTTP failures once with timer-driven backoff", async () => {
