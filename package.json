@@ -215,6 +215,7 @@
     "./cli-entry": "./openclaw.mjs"
   },
   "scripts": {
+    "agent-chat-editor": "node --import tsx scripts/agent-chat-editor.ts",
     "android:assemble": "cd apps/android && ./gradlew :app:assembleDebug",
     "android:format": "cd apps/android && ./gradlew :app:ktlintFormat :benchmark:ktlintFormat",
     "android:install": "cd apps/android && ./gradlew :app:installDebug",
