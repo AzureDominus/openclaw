@@ -433,6 +433,110 @@ describe("runWithModelFallback", () => {
     expect(firstRetryEvent?.waitMs ?? 0).toBeGreaterThan(0);
   });
 
+  it("retries the same model on overloaded errors before fallback by default", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+            fallbacks: ["anthropic/claude-haiku-3-5"],
+          },
+          models: {
+            "openai/gpt-4.1-mini": {
+              retry: {
+                maxRetries: 1,
+                initialBackoffSeconds: 0.001,
+                backoffFactor: 1,
+                maxBackoffSeconds: 0.001,
+              },
+            },
+            "anthropic/claude-haiku-3-5": {},
+          },
+        },
+      },
+    });
+
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new Error("The AI service is temporarily overloaded. Please try again in a moment."),
+      )
+      .mockResolvedValueOnce("ok");
+    const onRetryScheduled = vi.fn();
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+      onRetryScheduled,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run.mock.calls).toEqual([
+      ["openai", "gpt-4.1-mini"],
+      ["openai", "gpt-4.1-mini"],
+    ]);
+    expect(onRetryScheduled).toHaveBeenCalledTimes(1);
+    expect(onRetryScheduled.mock.calls[0]?.[0]).toMatchObject({
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      reason: "overloaded",
+      source: "error",
+      retryAttempt: 1,
+      maxRetries: 1,
+      candidateAttempt: 1,
+      totalCandidates: 2,
+    });
+  });
+
+  it("accepts explicit overloaded retry reasons in model retry config", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+            fallbacks: ["anthropic/claude-haiku-3-5"],
+          },
+          models: {
+            "openai/gpt-4.1-mini": {
+              retry: {
+                maxRetries: 1,
+                initialBackoffSeconds: 0.001,
+                backoffFactor: 1,
+                maxBackoffSeconds: 0.001,
+                reasons: ["overloaded"],
+              },
+            },
+            "anthropic/claude-haiku-3-5": {},
+          },
+        },
+      },
+    });
+
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new Error(
+          'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request. You can retry your request.","param":null}}',
+        ),
+      )
+      .mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run.mock.calls).toEqual([
+      ["openai", "gpt-4.1-mini"],
+      ["openai", "gpt-4.1-mini"],
+    ]);
+  });
+
   it("falls back after exhausting configured model retries", async () => {
     const cfg = makeCfg({
       agents: {
