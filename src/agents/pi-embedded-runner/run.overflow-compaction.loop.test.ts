@@ -441,10 +441,10 @@ describe("overflow compaction in run loop", () => {
       "SYSTEM CONTINUE GUARD (1/3)",
     );
     expect(mockedRunEmbeddedAttempt.mock.calls[1]?.[0]?.prompt ?? "").toContain(
-      "may have surfaced partial progress already",
+      "already delivered to the user",
     );
     expect(mockedRunEmbeddedAttempt.mock.calls[1]?.[0]?.prompt ?? "").not.toContain(
-      "already delivered to the user",
+      "may have surfaced partial progress already",
     );
     expect(mockedRunEmbeddedAttempt.mock.calls[2]?.[0]?.prompt ?? "").toContain(
       "SYSTEM CONTINUE GUARD (2/3)",

@@ -364,15 +364,18 @@ export const dispatchTelegramMessage = async ({
     await lane.stream.flush();
   };
 
-  const disableBlockStreaming = !previewStreamingEnabled
-    ? true
-    : forceBlockStreamingForReasoning
+  // `streamMode: off` disables preview editing, but progress/block replies
+  // still need to flow so continue-guard checkpoints remain visible.
+  const disableBlockStreaming =
+    streamMode === "off"
       ? false
-      : typeof telegramCfg.blockStreaming === "boolean"
-        ? !telegramCfg.blockStreaming
-        : canStreamAnswerDraft
-          ? true
-          : undefined;
+      : forceBlockStreamingForReasoning
+        ? false
+        : typeof telegramCfg.blockStreaming === "boolean"
+          ? !telegramCfg.blockStreaming
+          : canStreamAnswerDraft
+            ? true
+            : undefined;
 
   const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
     cfg,
@@ -534,6 +537,13 @@ export const dispatchTelegramMessage = async ({
       dispatcherOptions: {
         ...prefixOptions,
         typingCallbacks,
+        stripStopReasonMarker: true,
+        durableRoute: {
+          channel: "telegram",
+          to: String(chatId),
+          accountId: route.accountId,
+          threadId: threadSpec?.id ?? null,
+        },
         deliver: async (payload, info) => {
           if (info.kind === "final") {
             // Assistant callbacks are fire-and-forget; ensure queued boundary
