@@ -630,6 +630,7 @@ export async function runEmbeddedPiAgent(
       const MAX_EMPTY_ERROR_RETRIES = 3;
       let emptyErrorRetries = 0;
       const overloadFailoverBackoffMs = resolveOverloadFailoverBackoffMs(params.config);
+      let overloadFailoverAttempts = 0;
       const overloadProfileRotationLimit = resolveOverloadProfileRotationLimit(params.config);
       const rateLimitProfileRotationLimit = resolveRateLimitProfileRotationLimit(params.config);
       const maybeEscalateRateLimitProfileFallback = (params: {
@@ -687,6 +688,17 @@ export async function runEmbeddedPiAgent(
         if (reason !== "overloaded" || overloadFailoverBackoffMs <= 0) {
           return;
         }
+        const retryAttempt = overloadFailoverAttempts + 1;
+        await params.onRetryScheduled?.({
+          provider,
+          model: modelId,
+          reason,
+          source: "error",
+          retryAttempt,
+          maxRetries: MAX_RUN_LOOP_ITERATIONS,
+          waitMs: overloadFailoverBackoffMs,
+        });
+        overloadFailoverAttempts = retryAttempt;
         log.warn(
           `overload backoff before failover for ${provider}/${modelId}: delayMs=${overloadFailoverBackoffMs}`,
         );
