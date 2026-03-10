@@ -72,6 +72,7 @@ const ERROR_PATTERNS = {
   ],
   overloaded: [
     /overloaded_error|"type"\s*:\s*"overloaded_error"/i,
+    /"(?:type|code)"\s*:\s*"server_error".*retry your request/i,
     "overloaded",
     /\b(?:selected\s+)?model\s+(?:is\s+)?at capacity\b/i,
     // Match "service unavailable" only when combined with an explicit overload

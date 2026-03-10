@@ -18,6 +18,10 @@ import { evaluateSessionFreshness, resolveSessionResetPolicy } from "./reset.js"
 import { resolveAndPersistSessionFile } from "./session-file.js";
 import { clearSessionStoreCacheForTest, loadSessionStore, updateSessionStore } from "./store.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
+import {
+  appendAssistantMessageToSessionTranscript,
+  appendOutboundDeliveryTraceToSessionTranscript,
+} from "./transcript.js";
 import { mergeSessionEntry, type SessionEntry } from "./types.js";
 
 describe("session path safety", () => {
@@ -433,6 +437,56 @@ describe("session store lock (Promise chain mutex)", () => {
     expect(result?.acp).toBeUndefined();
     const store = loadSessionStore(storePath);
     expect(store[key]?.acp).toBeUndefined();
+  });
+});
+
+describe("appendOutboundDeliveryTraceToSessionTranscript", () => {
+  const fixture = useTempSessionsFixture("delivery-trace-test-");
+
+  it("appends a custom outbound-delivery trace for valid sessions", async () => {
+    const sessionId = "trace-session-id";
+    const sessionKey = "trace-session";
+    const store = {
+      [sessionKey]: {
+        sessionId,
+        chatType: "group",
+        channel: "telegram",
+      },
+    };
+    fs.writeFileSync(fixture.storePath(), JSON.stringify(store), "utf-8");
+
+    await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text: "Facts.",
+      storePath: fixture.storePath(),
+    });
+
+    const result = await appendOutboundDeliveryTraceToSessionTranscript({
+      sessionKey,
+      storePath: fixture.storePath(),
+      trace: {
+        channel: "telegram",
+        to: "-100123",
+        messageId: "456",
+        content: "Facts.",
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const lines = fs.readFileSync(result.sessionFile, "utf-8").trim().split("\n");
+      expect(lines.length).toBe(3);
+
+      const traceLine = JSON.parse(lines[2]);
+      expect(traceLine.type).toBe("custom");
+      expect(traceLine.customType).toBe("openclaw:outbound-delivery");
+      expect(traceLine.data).toMatchObject({
+        channel: "telegram",
+        to: "-100123",
+        messageId: "456",
+        content: "Facts.",
+      });
+    }
   });
 });
 

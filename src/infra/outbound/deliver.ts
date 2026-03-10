@@ -8,6 +8,7 @@ import type {
   ChannelOutboundTargetRef,
 } from "../../channels/plugins/types.adapters.js";
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
+import type { OutboundDeliveryTrace } from "../../config/sessions/transcript.js";
 import type { ReplyToMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { fireAndForgetHook } from "../../hooks/fire-and-forget.js";
@@ -611,6 +612,7 @@ function createMessageSentEmitter(params: {
   sessionKeyForInternalHooks?: string;
   mirrorIsGroup?: boolean;
   mirrorGroupId?: string;
+  onDeliveredTrace?: (trace: OutboundDeliveryTrace) => void;
 }): { emitMessageSent: (event: MessageSentEvent) => void; hasMessageSentHooks: boolean } {
   const hasMessageSentHooks = params.hookRunner?.hasHooks("message_sent") ?? false;
   const canEmitInternalHook = Boolean(params.sessionKeyForInternalHooks);
@@ -641,6 +643,15 @@ function createMessageSentEmitter(params: {
           log.warn(message);
         },
       );
+    }
+    if (event.success) {
+      params.onDeliveredTrace?.({
+        channel: params.channel,
+        to: params.to,
+        accountId: params.accountId,
+        messageId: event.messageId,
+        content: event.content,
+      });
     }
     if (!canEmitInternalHook) {
       return;
@@ -930,6 +941,7 @@ async function deliverOutboundPayloadsCore(
   const sessionKeyForInternalHooks = params.mirror?.sessionKey ?? params.session?.key;
   const mirrorIsGroup = params.mirror?.isGroup;
   const mirrorGroupId = params.mirror?.groupId;
+  const deliveryTraces: OutboundDeliveryTrace[] = [];
   const { emitMessageSent, hasMessageSentHooks } = createMessageSentEmitter({
     hookRunner,
     channel,
@@ -938,6 +950,9 @@ async function deliverOutboundPayloadsCore(
     sessionKeyForInternalHooks,
     mirrorIsGroup,
     mirrorGroupId,
+    onDeliveredTrace: (trace) => {
+      deliveryTraces.push(trace);
+    },
   });
   const hasMessageSendingHooks = hookRunner?.hasHooks("message_sending") ?? false;
   const diagnosticSessionKey = sessionKeyForDeliveryDiagnostics(params);
@@ -1210,13 +1225,27 @@ async function deliverOutboundPayloadsCore(
       mediaUrls: params.mirror.mediaUrls,
     });
     if (mirrorText) {
-      const { appendAssistantMessageToSessionTranscript } = await loadTranscriptRuntime();
+      const {
+        appendAssistantMessageToSessionTranscript,
+        appendOutboundDeliveryTraceToSessionTranscript,
+      } = await loadTranscriptRuntime();
       await appendAssistantMessageToSessionTranscript({
         agentId: params.mirror.agentId,
         sessionKey: params.mirror.sessionKey,
         text: mirrorText,
         idempotencyKey: params.mirror.idempotencyKey,
       });
+      for (const trace of deliveryTraces) {
+        await appendOutboundDeliveryTraceToSessionTranscript({
+          agentId: params.mirror.agentId,
+          sessionKey: params.mirror.sessionKey,
+          trace,
+        }).catch((err) => {
+          log.warn(
+            `deliverOutboundPayloads: outbound delivery trace append failed: ${String(err)}`,
+          );
+        });
+      }
     }
   }
 

@@ -391,3 +391,70 @@ async function findLatestEquivalentAssistantMessageId(
 
   return undefined;
 }
+
+export type OutboundDeliveryTrace = {
+  channel: string;
+  to: string;
+  accountId?: string;
+  messageId?: string;
+  content: string;
+};
+
+export async function appendOutboundDeliveryTraceToSessionTranscript(params: {
+  agentId?: string;
+  sessionKey: string;
+  trace: OutboundDeliveryTrace;
+  /** Optional override for store path (mostly for tests). */
+  storePath?: string;
+}): Promise<{ ok: true; sessionFile: string } | { ok: false; reason: string }> {
+  const sessionKey = params.sessionKey.trim();
+  if (!sessionKey) {
+    return { ok: false, reason: "missing sessionKey" };
+  }
+
+  const content = params.trace.content.trim();
+  if (!content) {
+    return { ok: false, reason: "empty content" };
+  }
+
+  const storePath = params.storePath ?? resolveDefaultSessionStorePath(params.agentId);
+  const store = loadSessionStore(storePath, { skipCache: true });
+  const entry = store[sessionKey] as SessionEntry | undefined;
+  if (!entry?.sessionId) {
+    return { ok: false, reason: `unknown sessionKey: ${sessionKey}` };
+  }
+
+  let sessionFile: string;
+  try {
+    const resolvedSessionFile = await resolveAndPersistSessionFile({
+      sessionId: entry.sessionId,
+      sessionKey,
+      sessionStore: store,
+      storePath,
+      sessionEntry: entry,
+      agentId: params.agentId,
+      sessionsDir: path.dirname(storePath),
+    });
+    sessionFile = resolvedSessionFile.sessionFile;
+  } catch (err) {
+    return {
+      ok: false,
+      reason: err instanceof Error ? err.message : String(err),
+    };
+  }
+
+  await ensureSessionHeader({ sessionFile, sessionId: entry.sessionId });
+
+  const sessionManager = SessionManager.open(sessionFile);
+  sessionManager.appendCustomEntry("openclaw:outbound-delivery", {
+    channel: params.trace.channel,
+    to: params.trace.to,
+    accountId: params.trace.accountId,
+    messageId: params.trace.messageId,
+    content,
+    timestamp: Date.now(),
+  });
+
+  emitSessionTranscriptUpdate(sessionFile);
+  return { ok: true, sessionFile };
+}
