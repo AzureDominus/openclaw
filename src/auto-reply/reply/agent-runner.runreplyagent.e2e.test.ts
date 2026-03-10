@@ -291,6 +291,23 @@ describe("runReplyAgent typing (heartbeat)", () => {
     expect(typing.startTypingLoop).not.toHaveBeenCalled();
   });
 
+  it("disables the message tool for heartbeat runs", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "final" }],
+      meta: {},
+    });
+
+    const { run } = createMinimalRun({
+      opts: { isHeartbeat: true },
+    });
+    await run();
+
+    const call = state.runEmbeddedPiAgentMock.mock.calls[0]?.[0] as {
+      disableMessageTool?: boolean;
+    };
+    expect(call.disableMessageTool).toBe(true);
+  });
+
   it("suppresses NO_REPLY partials but allows normal No-prefix partials", async () => {
     const cases = [
       {

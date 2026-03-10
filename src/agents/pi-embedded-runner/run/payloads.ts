@@ -25,6 +25,7 @@ import {
   extractAssistantVisibleText,
   formatReasoningMessage,
 } from "../../pi-embedded-utils.js";
+import { stripDeclaredStopReasonLine } from "../../stop-reason.js";
 import { isExecLikeToolName, type ToolErrorSummary } from "../../tool-error-summary.js";
 import { isLikelyMutatingToolName } from "../../tool-mutation.js";
 
@@ -325,11 +326,12 @@ export function buildEmbeddedRunPayloads(params: {
       replyToTag,
       replyToCurrent,
     } = parseReplyDirectives(text);
-    if (!cleanedText && (!mediaUrls || mediaUrls.length === 0) && !audioAsVoice) {
+    const visibleText = cleanedText ? stripDeclaredStopReasonLine(cleanedText) : cleanedText;
+    if (!visibleText && (!mediaUrls || mediaUrls.length === 0) && !audioAsVoice) {
       continue;
     }
     replyItems.push({
-      text: cleanedText,
+      text: visibleText,
       media: mediaUrls,
       audioAsVoice,
       replyToId,

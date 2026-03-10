@@ -312,4 +312,12 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
 
     expectSinglePayloadText(payloads, "THINKING-OFF-OK");
   });
+
+  it("strips OPENCLAW_STOP_REASON markers from assistant payload text", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Config repo still looks weird.\n\nOPENCLAW_STOP_REASON: completed"],
+    });
+
+    expectSinglePayloadText(payloads, "Config repo still looks weird.");
+  });
 });
