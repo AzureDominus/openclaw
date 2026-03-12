@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { loadSessionStore } from "../config/sessions.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import {
@@ -103,5 +104,92 @@ describe("heartbeat transcript append-only (#39609)", () => {
         usage: { inputTokens: 10, outputTokens: 20, cacheReadTokens: 0, cacheWriteTokens: 0 },
       },
     });
+  });
+
+  it("restores the previous session entry and transcript when heartbeat rotates sessions mid-run", async () => {
+    await withTempTelegramHeartbeatSandbox(
+      async ({ tmpDir, storePath, replySpy }) => {
+        const sessionKey = resolveMainSessionKey(undefined);
+        const previousSessionId = "sid-before-heartbeat";
+        const rotatedSessionId = "sid-heartbeat-only";
+        const previousUpdatedAt = 1_700_000_000_000;
+        const previousTranscriptPath = path.join(tmpDir, `${previousSessionId}.jsonl`);
+        const previousContent = await createTranscriptWithContent(
+          previousTranscriptPath,
+          previousSessionId,
+        );
+
+        await seedSessionStore(storePath, sessionKey, {
+          sessionId: previousSessionId,
+          updatedAt: previousUpdatedAt,
+          lastChannel: "telegram",
+          lastProvider: "telegram",
+          lastTo: "user123",
+        });
+
+        replySpy.mockImplementationOnce(async () => {
+          const archivedTranscriptPath = `${previousTranscriptPath}.reset.2026-03-12T04-08-01.343Z`;
+          await fs.rename(previousTranscriptPath, archivedTranscriptPath);
+          await fs.writeFile(
+            path.join(tmpDir, `${rotatedSessionId}.jsonl`),
+            `${JSON.stringify({
+              type: "session",
+              version: 3,
+              id: rotatedSessionId,
+              timestamp: new Date().toISOString(),
+              cwd: process.cwd(),
+            })}\n{"role":"user","content":"hb"}\n{"role":"assistant","content":"HEARTBEAT_OK"}\n`,
+          );
+          await fs.writeFile(
+            storePath,
+            JSON.stringify({
+              [sessionKey]: {
+                sessionId: rotatedSessionId,
+                updatedAt: previousUpdatedAt + 50_000,
+                lastChannel: "telegram",
+                lastProvider: "telegram",
+                lastTo: "user123",
+              },
+            }),
+          );
+          return {
+            text: "HEARTBEAT_OK",
+            usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+          };
+        });
+
+        const cfg = {
+          agents: {
+            defaults: {
+              workspace: tmpDir,
+              heartbeat: {
+                every: "5m",
+                target: "telegram",
+              },
+            },
+          },
+          channels: {
+            telegram: {
+              heartbeat: { showOk: false },
+            },
+          },
+          session: { store: storePath },
+        } as unknown as OpenClawConfig;
+
+        await runHeartbeatOnce({
+          agentId: undefined,
+          reason: "test",
+          cfg,
+          deps: { sendTelegram: vi.fn() },
+        });
+
+        const store = loadSessionStore(storePath);
+        expect(store[sessionKey]?.sessionId).toBe(previousSessionId);
+        expect(store[sessionKey]?.updatedAt).toBe(previousUpdatedAt);
+        expect(await fs.readFile(previousTranscriptPath, "utf-8")).toBe(previousContent);
+        await expect(fs.stat(path.join(tmpDir, `${rotatedSessionId}.jsonl`))).rejects.toThrow();
+      },
+      { prefix: "openclaw-hb-prune-rotate-" },
+    );
   });
 });

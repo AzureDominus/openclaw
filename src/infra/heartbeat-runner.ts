@@ -37,13 +37,14 @@ import {
   canonicalizeMainSessionAlias,
   resolveAgentMainSessionKey,
 } from "../config/sessions/main-session.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveSessionFilePath, resolveStorePath } from "../config/sessions/paths.js";
 import { loadSessionStore } from "../config/sessions/store-load.js";
 import {
   archiveRemovedSessionTranscripts,
   saveSessionStore,
   updateSessionStore,
 } from "../config/sessions/store.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCronSession } from "../cron/isolated-agent/session.js";
@@ -476,6 +477,161 @@ async function restoreHeartbeatUpdatedAt(params: {
   });
 }
 
+/**
+ * Prune heartbeat transcript entries by truncating the file back to a previous size.
+ * This removes the user+assistant turns that were written during a HEARTBEAT_OK run,
+ * preventing context pollution from zero-information exchanges.
+ */
+async function pruneHeartbeatTranscript(params: {
+  transcriptPath?: string;
+  preHeartbeatSize?: number;
+}) {
+  const { transcriptPath, preHeartbeatSize } = params;
+  if (!transcriptPath || typeof preHeartbeatSize !== "number" || preHeartbeatSize < 0) {
+    return;
+  }
+  try {
+    const stat = await fs.stat(transcriptPath);
+    // Only truncate if the file has grown during the heartbeat run
+    if (stat.size > preHeartbeatSize) {
+      await fs.truncate(transcriptPath, preHeartbeatSize);
+    }
+  } catch {
+    // File may not exist or may have been removed - ignore errors
+  }
+}
+
+/**
+ * Get the transcript file path and its current size before a heartbeat run.
+ * Returns undefined values if the session or transcript doesn't exist yet.
+ */
+async function captureTranscriptState(params: {
+  storePath: string;
+  sessionKey: string;
+  agentId?: string;
+}): Promise<{
+  previousEntry?: SessionEntry;
+  transcriptPath?: string;
+  preHeartbeatSize?: number;
+}> {
+  const { storePath, sessionKey, agentId } = params;
+  const store = loadSessionStore(storePath);
+  const entry = store[sessionKey];
+  const previousEntry = entry ? { ...entry } : undefined;
+  if (!entry?.sessionId) {
+    return { previousEntry };
+  }
+  try {
+    const transcriptPath = resolveSessionFilePath(entry.sessionId, entry, {
+      agentId,
+      sessionsDir: path.dirname(storePath),
+    });
+    const stat = await fs.stat(transcriptPath);
+    return { previousEntry, transcriptPath, preHeartbeatSize: stat.size };
+  } catch {
+    // Session or transcript doesn't exist yet - nothing to prune
+    return { previousEntry };
+  }
+}
+
+function resolveTranscriptPathForEntry(params: {
+  storePath: string;
+  agentId?: string;
+  entry?: SessionEntry;
+}): string | undefined {
+  const { storePath, agentId, entry } = params;
+  if (!entry?.sessionId) {
+    return undefined;
+  }
+  try {
+    return resolveSessionFilePath(entry.sessionId, entry, {
+      agentId,
+      sessionsDir: path.dirname(storePath),
+    });
+  } catch {
+    return undefined;
+  }
+}
+
+async function restoreArchivedHeartbeatTranscript(transcriptPath: string): Promise<void> {
+  try {
+    await fs.access(transcriptPath);
+    return;
+  } catch {
+    // Fall through and look for the archived reset copy.
+  }
+
+  const archivePrefix = `${path.basename(transcriptPath)}.reset.`;
+  try {
+    const entries = await fs.readdir(path.dirname(transcriptPath));
+    const latestArchive = entries
+      .filter((entry) => entry.startsWith(archivePrefix))
+      .toSorted()
+      .at(-1);
+    if (!latestArchive) {
+      return;
+    }
+    await fs.rename(path.join(path.dirname(transcriptPath), latestArchive), transcriptPath);
+  } catch {
+    // Best-effort restoration.
+  }
+}
+
+async function restoreHeartbeatSessionSnapshot(params: {
+  storePath: string;
+  sessionKey: string;
+  agentId?: string;
+  transcriptState: {
+    previousEntry?: SessionEntry;
+    transcriptPath?: string;
+    preHeartbeatSize?: number;
+  };
+}) {
+  const { storePath, sessionKey, agentId, transcriptState } = params;
+  const { previousEntry, transcriptPath, preHeartbeatSize } = transcriptState;
+  const currentStore = loadSessionStore(storePath);
+  const currentEntry = currentStore[sessionKey];
+  const currentTranscriptPath = resolveTranscriptPathForEntry({
+    storePath,
+    agentId,
+    entry: currentEntry,
+  });
+  const currentSessionMatchesPrevious =
+    Boolean(previousEntry?.sessionId) && currentEntry?.sessionId === previousEntry?.sessionId;
+  const restoredEntry = previousEntry
+    ? {
+        ...previousEntry,
+        updatedAt: currentSessionMatchesPrevious
+          ? Math.max(previousEntry.updatedAt ?? 0, currentEntry?.updatedAt ?? 0)
+          : previousEntry.updatedAt,
+      }
+    : undefined;
+
+  await updateSessionStore(storePath, (nextStore) => {
+    if (restoredEntry) {
+      nextStore[sessionKey] = restoredEntry;
+      return;
+    }
+    delete nextStore[sessionKey];
+  });
+
+  if (currentTranscriptPath && currentTranscriptPath !== transcriptPath) {
+    await fs.rm(currentTranscriptPath, { force: true }).catch(() => undefined);
+  }
+
+  if (!transcriptPath) {
+    return;
+  }
+
+  if (previousEntry) {
+    await restoreArchivedHeartbeatTranscript(transcriptPath);
+  }
+  await pruneHeartbeatTranscript({
+    transcriptPath,
+    preHeartbeatSize,
+  });
+}
+
 function stripLeadingHeartbeatResponsePrefix(
   text: string,
   responsePrefix: string | undefined,
@@ -793,6 +949,11 @@ export async function runHeartbeatOnce(opts: {
   }
 
   const previousUpdatedAt = entry?.updatedAt;
+  const transcriptState = await captureTranscriptState({
+    storePath,
+    sessionKey,
+    agentId,
+  });
 
   // When isolatedSession is enabled, create a fresh session via the same
   // pattern as cron sessionTarget: "isolated". This gives the heartbeat
@@ -1084,12 +1245,12 @@ export async function runHeartbeatOnce(opts: {
       : [];
 
     if (!replyPayload || !hasOutboundReplyContent(replyPayload)) {
-      await restoreHeartbeatUpdatedAt({
+      await restoreHeartbeatSessionSnapshot({
         storePath,
         sessionKey,
-        updatedAt: previousUpdatedAt,
+        agentId,
+        transcriptState,
       });
-
       const okSent = await maybeSendHeartbeatOk();
       emitHeartbeatEvent({
         status: "ok-empty",
@@ -1121,12 +1282,12 @@ export async function runHeartbeatOnce(opts: {
     }
     const shouldSkipMain = normalized.shouldSkip && !normalized.hasMedia && !hasExecCompletion;
     if (shouldSkipMain && reasoningPayloads.length === 0) {
-      await restoreHeartbeatUpdatedAt({
+      await restoreHeartbeatSessionSnapshot({
         storePath,
         sessionKey,
-        updatedAt: previousUpdatedAt,
+        agentId,
+        transcriptState,
       });
-
       const okSent = await maybeSendHeartbeatOk();
       emitHeartbeatEvent({
         status: "ok-token",
@@ -1159,12 +1320,12 @@ export async function runHeartbeatOnce(opts: {
       startedAt - prevHeartbeatAt < 24 * 60 * 60 * 1000;
 
     if (isDuplicateMain) {
-      await restoreHeartbeatUpdatedAt({
+      await restoreHeartbeatSessionSnapshot({
         storePath,
         sessionKey,
-        updatedAt: previousUpdatedAt,
+        agentId,
+        transcriptState,
       });
-
       emitHeartbeatEvent({
         status: "skipped",
         reason: "duplicate",
