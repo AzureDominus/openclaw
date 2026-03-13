@@ -144,14 +144,22 @@ describe("handleTelegramAction", () => {
     const textPayload = result.content.find((item) => item.type === "text");
     expect(textPayload?.type).toBe("text");
     const parsed = JSON.parse((textPayload as { type: "text"; text: string }).text) as {
-      ok: boolean;
+      added: boolean;
+      reason?: string;
       warning?: string;
-      added?: string;
+      retryHint?: string;
+      instructions?: string;
+      noteForToolsMd?: string;
     };
     expect(parsed).toMatchObject({
-      ok: false,
+      added: false,
+      reason: "REACTION_UNAVAILABLE",
       warning: "Reaction unavailable: ✅",
-      added: "✅",
+      retryHint: "Retry once with a different emoji.",
+      instructions:
+        "Telegram chat 123 does not accept ✅ as a reaction. Retry once with a different emoji, then remember that ✅ is unavailable there.",
+      noteForToolsMd:
+        "Telegram chat 123 rejects the reaction emoji ✅. Do not use ✅ there again unless the user explicitly asks.",
     });
   });
 
@@ -175,6 +183,23 @@ describe("handleTelegramAction", () => {
       "✅",
       expect.objectContaining({ token: "tok", remove: false }),
     );
+  });
+
+  it("returns retry guidance when Telegram rejects a reaction emoji", async () => {
+    reactMessageTelegram.mockRejectedValueOnce(
+      new Error("Call to 'setMessageReaction' failed! (400: Bad Request: REACTION_INVALID)"),
+    );
+    const result = await handleTelegramAction(defaultReactionAction, reactionConfig("minimal"));
+    expect(result.details).toMatchObject({
+      added: false,
+      reason: "REACTION_UNAVAILABLE",
+      warning: "Reaction unavailable: ✅",
+      retryHint: "Retry once with a different emoji.",
+      instructions:
+        "Telegram chat 123 does not accept ✅ as a reaction. Retry once with a different emoji, then remember that ✅ is unavailable there.",
+      noteForToolsMd:
+        "Telegram chat 123 rejects the reaction emoji ✅. Do not use ✅ there again unless the user explicitly asks.",
+    });
   });
 
   it("soft-fails when messageId is missing", async () => {

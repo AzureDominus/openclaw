@@ -176,6 +176,32 @@ function normalizeTelegramDeliveryPin(params: Record<string, unknown>) {
   } as const;
 }
 
+function telegramReactionUnavailableResult(params: {
+  chatId?: string;
+  messageId?: number;
+  emoji?: string;
+}) {
+  const emoji = params.emoji?.trim() || "";
+  const chatLabel = params.chatId ? `Telegram chat ${params.chatId}` : "this Telegram chat";
+  const warning = emoji ? `Reaction unavailable: ${emoji}` : "Reaction unavailable";
+  const noteForToolsMd = emoji
+    ? `${chatLabel} rejects the reaction emoji ${emoji}. Do not use ${emoji} there again unless the user explicitly asks.`
+    : `${chatLabel} rejected a reaction emoji. Record the specific emoji in TOOLS.md or session notes once known, and do not retry it there.`;
+  return jsonResult({
+    added: false,
+    reason: "REACTION_UNAVAILABLE",
+    warning,
+    emoji: emoji || undefined,
+    chatId: params.chatId,
+    messageId: params.messageId,
+    retryHint: "Retry once with a different emoji.",
+    instructions: emoji
+      ? `${chatLabel} does not accept ${emoji} as a reaction. Retry once with a different emoji, then remember that ${emoji} is unavailable there.`
+      : `${chatLabel} rejected this reaction. Retry once with a different emoji and remember which emoji failed there.`,
+    noteForToolsMd,
+  });
+}
+
 async function maybePinTelegramActionSend(params: {
   args: Record<string, unknown>;
   cfg: OpenClawConfig;
@@ -283,16 +309,28 @@ export async function handleTelegramAction(
       );
     } catch (err) {
       const isInvalid = String(err).includes("REACTION_INVALID");
+      if (isInvalid) {
+        return telegramReactionUnavailableResult({
+          chatId: chatId ?? undefined,
+          messageId,
+          emoji: emoji ?? undefined,
+        });
+      }
       return jsonResult({
         ok: false,
-        reason: isInvalid ? "REACTION_INVALID" : "error",
+        reason: "error",
         emoji,
-        hint: isInvalid
-          ? "This emoji is not supported for Telegram reactions. Add it to your reaction disallow list so you do not try it again."
-          : "Reaction failed. Do not retry.",
+        hint: "Reaction failed. Do not retry.",
       });
     }
     if (!reactionResult.ok) {
+      if (/^Reaction unavailable:/i.test(reactionResult.warning)) {
+        return telegramReactionUnavailableResult({
+          chatId: chatId ?? undefined,
+          messageId,
+          emoji: emoji ?? undefined,
+        });
+      }
       return jsonResult({
         ok: false,
         warning: reactionResult.warning,
