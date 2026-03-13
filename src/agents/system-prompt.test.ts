@@ -312,6 +312,8 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("## Tool Call Style");
     expect(prompt).toContain("For multi-step or long-running work");
+    expect(prompt).toContain("For acknowledgement-only reactions");
+    expect(prompt).toContain("never announce the reaction");
     expect(prompt).toContain("send concise progress updates between tool bursts");
     expect(prompt).toContain("If the user explicitly asks for updates between tool calls");
     expect(prompt).toContain("before each tool call or small tool batch");
@@ -941,6 +943,7 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("## Reactions");
     expect(prompt).toContain("Reactions are enabled for Telegram in MINIMAL mode.");
+    expect(prompt).toContain("Never announce ack reactions");
   });
 });
 
