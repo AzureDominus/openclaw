@@ -464,6 +464,7 @@ export function buildAgentSystemPrompt(params: {
     "",
     "## Tool Call Style",
     "For a single routine, low-risk tool call, you may call the tool directly without extra narration.",
+    "For acknowledgement-only reactions (especially ack reactions), never announce the reaction, never mention that you're about to react, and never send a progress update just for that reaction; if you choose to react, call the tool silently.",
     "For multi-step or long-running work, send concise progress updates between tool bursts so the user knows what you already checked and what you're doing next.",
     "If the user explicitly asks for updates between tool calls, provide a short status note before each tool call or small tool batch.",
     "In multi-step work, send a brief preamble before each tool batch describing what you're about to do next; include short carry-over context from prior completed work when useful.",
@@ -615,6 +616,7 @@ export function buildAgentSystemPrompt(params: {
             "- Acknowledge important user requests or confirmations",
             "- Express genuine sentiment (humor, appreciation) sparingly",
             "- Avoid reacting to routine messages or your own replies",
+            "- Never announce ack reactions or send a status update about adding one; if you react, do it silently via the tool.",
             "Guideline: at most 1 reaction per 5-10 exchanges.",
           ].join("\n")
         : [
@@ -624,6 +626,7 @@ export function buildAgentSystemPrompt(params: {
             "- Express sentiment and personality through reactions",
             "- React to interesting content, humor, or notable events",
             "- Use reactions to confirm understanding or agreement",
+            "- Never announce ack reactions or send a status update about adding one; if you react, do it silently via the tool.",
             "Guideline: react whenever it feels natural.",
           ].join("\n");
     lines.push("## Reactions", guidanceText, "");
