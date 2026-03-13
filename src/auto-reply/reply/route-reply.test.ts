@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   sendMessageTelegram: vi.fn(async () => ({ messageId: "m1", chatId: "c1" })),
   sendMessageWhatsApp: vi.fn(async () => ({ messageId: "m1", toJid: "jid" })),
   deliverOutboundPayloads: vi.fn(),
+  deliverOutboundPayloadsDetailed: vi.fn(),
 }));
 
 vi.mock("../../discord/send.js", () => ({
@@ -53,6 +54,7 @@ vi.mock("../../infra/outbound/deliver.js", async () => {
   return {
     ...actual,
     deliverOutboundPayloads: mocks.deliverOutboundPayloads,
+    deliverOutboundPayloadsDetailed: mocks.deliverOutboundPayloadsDetailed,
   };
 });
 const actualDeliver = await vi.importActual<typeof import("../../infra/outbound/deliver.js")>(
@@ -109,6 +111,9 @@ describe("routeReply", () => {
   beforeEach(() => {
     setActivePluginRegistry(defaultRegistry);
     mocks.deliverOutboundPayloads.mockImplementation(actualDeliver.deliverOutboundPayloads);
+    mocks.deliverOutboundPayloadsDetailed.mockImplementation(
+      actualDeliver.deliverOutboundPayloadsDetailed,
+    );
   });
 
   afterEach(() => {
@@ -140,6 +145,7 @@ describe("routeReply", () => {
       cfg: {} as never,
     });
     expect(res.ok).toBe(true);
+    expect(res.delivered).toBe(false);
     expect(mocks.sendMessageSlack).not.toHaveBeenCalled();
   });
 
@@ -152,6 +158,7 @@ describe("routeReply", () => {
       cfg: {} as never,
     });
     expect(res.ok).toBe(true);
+    expect(res.delivered).toBe(false);
     expect(mocks.sendMessageSlack).not.toHaveBeenCalled();
   });
 
@@ -164,6 +171,7 @@ describe("routeReply", () => {
       cfg: {} as never,
     });
     expect(res.ok).toBe(true);
+    expect(res.delivered).toBe(false);
     expect(mocks.sendMessageSlack).not.toHaveBeenCalled();
   });
 
@@ -388,7 +396,11 @@ describe("routeReply", () => {
   });
 
   it("passes mirror data when sessionKey is set", async () => {
-    mocks.deliverOutboundPayloads.mockResolvedValue([]);
+    mocks.deliverOutboundPayloadsDetailed.mockResolvedValue({
+      results: [],
+      delivered: false,
+      zeroDeliveryReason: "unknown_zero_delivery",
+    });
     await routeReply({
       payload: { text: "hi" },
       channel: "slack",
@@ -398,7 +410,7 @@ describe("routeReply", () => {
       groupId: "channel:C123",
       cfg: {} as never,
     });
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+    expect(mocks.deliverOutboundPayloadsDetailed).toHaveBeenCalledWith(
       expect.objectContaining({
         mirror: expect.objectContaining({
           sessionKey: "agent:main:main",
@@ -411,7 +423,11 @@ describe("routeReply", () => {
   });
 
   it("skips mirror data when mirror is false", async () => {
-    mocks.deliverOutboundPayloads.mockResolvedValue([]);
+    mocks.deliverOutboundPayloadsDetailed.mockResolvedValue({
+      results: [],
+      delivered: false,
+      zeroDeliveryReason: "unknown_zero_delivery",
+    });
     await routeReply({
       payload: { text: "hi" },
       channel: "slack",
@@ -420,11 +436,77 @@ describe("routeReply", () => {
       mirror: false,
       cfg: {} as never,
     });
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+    expect(mocks.deliverOutboundPayloadsDetailed).toHaveBeenCalledWith(
       expect.objectContaining({
         mirror: undefined,
       }),
     );
+  });
+
+  it("reports unknown_zero_delivery when outbound completes with no visible sends", async () => {
+    mocks.deliverOutboundPayloadsDetailed.mockResolvedValue({
+      results: [],
+      delivered: false,
+      zeroDeliveryReason: "unknown_zero_delivery",
+    });
+
+    const res = await routeReply({
+      payload: { text: "hi" },
+      channel: "slack",
+      to: "channel:C123",
+      cfg: {} as never,
+    });
+
+    expect(res).toEqual({
+      ok: true,
+      delivered: false,
+      zeroDeliveryReason: "unknown_zero_delivery",
+      messageId: undefined,
+    });
+  });
+
+  it("reports cancelled_by_hook from outbound delivery metadata", async () => {
+    mocks.deliverOutboundPayloadsDetailed.mockResolvedValue({
+      results: [],
+      delivered: false,
+      zeroDeliveryReason: "cancelled_by_hook",
+    });
+
+    const res = await routeReply({
+      payload: { text: "hi" },
+      channel: "telegram",
+      to: "telegram:123",
+      cfg: {} as never,
+    });
+
+    expect(res).toEqual({
+      ok: true,
+      delivered: false,
+      zeroDeliveryReason: "cancelled_by_hook",
+      messageId: undefined,
+    });
+  });
+
+  it("reports empty_after_hooks from outbound delivery metadata", async () => {
+    mocks.deliverOutboundPayloadsDetailed.mockResolvedValue({
+      results: [],
+      delivered: false,
+      zeroDeliveryReason: "empty_after_hooks",
+    });
+
+    const res = await routeReply({
+      payload: { text: "hi" },
+      channel: "telegram",
+      to: "telegram:123",
+      cfg: {} as never,
+    });
+
+    expect(res).toEqual({
+      ok: true,
+      delivered: false,
+      zeroDeliveryReason: "empty_after_hooks",
+      messageId: undefined,
+    });
   });
 });
 

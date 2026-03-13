@@ -7,6 +7,7 @@ import type { FinalizedMsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { routeReply } from "./route-reply.js";
+import { deliverRoutedFinalReply } from "./routed-final-delivery.js";
 
 export type AcpDispatchDeliveryMeta = {
   toolCallId?: string;
@@ -149,15 +150,27 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         }
       }
 
-      const result = await routeReply({
-        payload: ttsPayload,
-        channel: params.originatingChannel,
-        to: params.originatingTo,
-        sessionKey: params.ctx.SessionKey,
-        accountId: params.ctx.AccountId,
-        threadId: params.ctx.MessageThreadId,
-        cfg: params.cfg,
-      });
+      const result =
+        kind === "final"
+          ? await deliverRoutedFinalReply({
+              payload: ttsPayload,
+              channel: params.originatingChannel,
+              to: params.originatingTo,
+              sessionKey: params.ctx.SessionKey,
+              accountId: params.ctx.AccountId,
+              threadId: params.ctx.MessageThreadId,
+              cfg: params.cfg,
+              component: "acp_dispatch",
+            })
+          : await routeReply({
+              payload: ttsPayload,
+              channel: params.originatingChannel,
+              to: params.originatingTo,
+              sessionKey: params.ctx.SessionKey,
+              accountId: params.ctx.AccountId,
+              threadId: params.ctx.MessageThreadId,
+              cfg: params.cfg,
+            });
       if (!result.ok) {
         logVerbose(
           `dispatch-acp: route-reply (acp/${kind}) failed: ${result.error ?? "unknown error"}`,
@@ -172,6 +185,12 @@ export function createAcpDispatchDeliveryCoordinator(params: {
           ...(params.ctx.MessageThreadId != null ? { threadId: params.ctx.MessageThreadId } : {}),
           messageId: result.messageId,
         });
+      }
+      if (kind === "final") {
+        if (result.delivered) {
+          state.routedCounts.final += 1;
+        }
+        return result.delivered;
       }
       state.routedCounts[kind] += 1;
       return true;

@@ -42,7 +42,7 @@ const ROUTABLE_TEST_CHANNELS = new Set([
 
 beforeEach(() => {
   routeReplyMock.mockReset();
-  routeReplyMock.mockResolvedValue({ ok: true });
+  routeReplyMock.mockResolvedValue({ ok: true, delivered: true });
   isRoutableChannelMock.mockReset();
   isRoutableChannelMock.mockImplementation((ch: string | undefined) =>
     Boolean(ch?.trim() && ROUTABLE_TEST_CHANNELS.has(ch.trim().toLowerCase())),
@@ -418,6 +418,7 @@ describe("createFollowupRunner messaging tool dedupe", () => {
   it("does not fall back to dispatcher when cross-channel origin routing fails", async () => {
     routeReplyMock.mockResolvedValueOnce({
       ok: false,
+      delivered: false,
       error: "forced route failure",
     });
     const { onBlockReply } = await runMessagingCase({
@@ -436,6 +437,7 @@ describe("createFollowupRunner messaging tool dedupe", () => {
   it("falls back to dispatcher when same-channel origin routing fails", async () => {
     routeReplyMock.mockResolvedValueOnce({
       ok: false,
+      delivered: false,
       error: "outbound adapter unavailable",
     });
     const { onBlockReply } = await runMessagingCase({
@@ -472,6 +474,59 @@ describe("createFollowupRunner messaging tool dedupe", () => {
         threadId: "1739142736.000100",
       }),
     );
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("sends the standard fallback when a routed Telegram followup zero-delivers", async () => {
+    routeReplyMock
+      .mockResolvedValueOnce({
+        ok: true,
+        delivered: false,
+        zeroDeliveryReason: "unknown_zero_delivery",
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        delivered: true,
+        messageId: "fallback-msg-1",
+      });
+
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: { payloads: [{ text: "hello world!" }] },
+      queued: {
+        ...baseQueuedRun("heartbeat"),
+        originatingChannel: "telegram",
+        originatingTo: "268300329",
+      } as FollowupRun,
+    });
+
+    expect(routeReplyMock).toHaveBeenCalledTimes(2);
+    expect(routeReplyMock.mock.calls[1]?.[0]).toEqual(
+      expect.objectContaining({
+        payload: { text: "No response generated. Please try again." },
+        channel: "telegram",
+        to: "268300329",
+      }),
+    );
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("does not send a fallback when a routed Telegram followup is cancelled by hook", async () => {
+    routeReplyMock.mockResolvedValueOnce({
+      ok: true,
+      delivered: false,
+      zeroDeliveryReason: "cancelled_by_hook",
+    });
+
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: { payloads: [{ text: "hello world!" }] },
+      queued: {
+        ...baseQueuedRun("heartbeat"),
+        originatingChannel: "telegram",
+        originatingTo: "268300329",
+      } as FollowupRun,
+    });
+
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
     expect(onBlockReply).not.toHaveBeenCalled();
   });
 });

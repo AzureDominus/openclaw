@@ -24,7 +24,11 @@ const policyMocks = vi.hoisted(() => ({
 }));
 
 const routeMocks = vi.hoisted(() => ({
-  routeReply: vi.fn(async (_params: unknown) => ({ ok: true, messageId: "mock" })),
+  routeReply: vi.fn(async (_params: unknown) => ({
+    ok: true,
+    delivered: true,
+    messageId: "mock",
+  })),
 }));
 
 const messageActionMocks = vi.hoisted(() => ({
@@ -217,7 +221,7 @@ describe("tryDispatchAcpReply", () => {
     policyMocks.resolveAcpAgentPolicyError.mockReset();
     policyMocks.resolveAcpAgentPolicyError.mockReturnValue(null);
     routeMocks.routeReply.mockReset();
-    routeMocks.routeReply.mockResolvedValue({ ok: true, messageId: "mock" });
+    routeMocks.routeReply.mockResolvedValue({ ok: true, delivered: true, messageId: "mock" });
     messageActionMocks.runMessageAction.mockReset();
     messageActionMocks.runMessageAction.mockResolvedValue({ ok: true as const });
     ttsMocks.maybeApplyTtsToPayload.mockClear();
@@ -255,10 +259,48 @@ describe("tryDispatchAcpReply", () => {
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
   });
 
+  it("sends the standard fallback when a routed ACP final zero-delivers", async () => {
+    setReadyAcpResolution();
+    managerMocks.runTurn.mockRejectedValueOnce(new Error("boom"));
+    routeMocks.routeReply
+      .mockResolvedValueOnce({
+        ok: true,
+        delivered: false,
+        zeroDeliveryReason: "unknown_zero_delivery",
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        delivered: true,
+        messageId: "fallback-msg-1",
+      });
+
+    const { dispatcher } = createDispatcher();
+    const result = await runDispatch({
+      bodyForAgent: "reply",
+      dispatcher,
+      shouldRouteToOriginating: true,
+    });
+
+    expect(routeMocks.routeReply).toHaveBeenCalledTimes(2);
+    expect(routeMocks.routeReply.mock.calls[1]?.[0]).toEqual(
+      expect.objectContaining({
+        payload: { text: "No response generated. Please try again." },
+        channel: "telegram",
+        to: "telegram:thread-1",
+      }),
+    );
+    expect(result?.queuedFinal).toBe(true);
+    expect(result?.counts.final).toBe(1);
+  });
+
   it("edits ACP tool lifecycle updates in place when supported", async () => {
     setReadyAcpResolution();
     mockToolLifecycleTurn("call-1");
-    routeMocks.routeReply.mockResolvedValueOnce({ ok: true, messageId: "tool-msg-1" });
+    routeMocks.routeReply.mockResolvedValueOnce({
+      ok: true,
+      delivered: true,
+      messageId: "tool-msg-1",
+    });
 
     const { dispatcher } = createDispatcher();
     await runDispatch({
@@ -283,8 +325,8 @@ describe("tryDispatchAcpReply", () => {
     setReadyAcpResolution();
     mockToolLifecycleTurn("call-2");
     routeMocks.routeReply
-      .mockResolvedValueOnce({ ok: true, messageId: "tool-msg-2" })
-      .mockResolvedValueOnce({ ok: true, messageId: "tool-msg-2-fallback" });
+      .mockResolvedValueOnce({ ok: true, delivered: true, messageId: "tool-msg-2" })
+      .mockResolvedValueOnce({ ok: true, delivered: true, messageId: "tool-msg-2-fallback" });
     messageActionMocks.runMessageAction.mockRejectedValueOnce(new Error("edit unsupported"));
 
     const { dispatcher } = createDispatcher();

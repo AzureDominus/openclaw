@@ -1,62 +1,99 @@
-# Fix Silent Zero-Delivery Finals in Telegram
+# Fix Silent Zero-Delivery on Routed Telegram Finals
 
 ## Summary
 
-The March 13, 2026 Iris incident is most likely a Telegram dispatch accounting bug, not a model/session failure and not a Telegram formatting failure.
+The March 13, 2026 repeat around `19:42:02Z` to `19:43:32Z` is not the original direct Telegram-final bug. The live gateway already contains that fix.
 
-Evidence already established:
+This repeat is most likely in the routed followup/origin path:
 
-- The missing Azure-comments reply exists in the Iris session and completed normally.
-- Iris Telegram streaming is off, so this ran through the direct-send path, not preview finalization.
-- The exact failed text formats into a valid Telegram chunk.
-- No `telegram sendMessage ok ...` or Telegram API failure was logged for that turn.
-- Current Telegram dispatch treats `queuedFinal` as success even when zero Telegram-visible messages were actually delivered.
+- the assistant final exists in the Iris session
+- no Telegram `sendMessage ok ...` was logged for that turn
+- no `telegram final reply unexpected_zero_delivery` log was emitted
+- a new inbound message arrived before the earlier turn completed, which makes the followup/origin-routing path plausible
+- `routeReply()` currently returns `{ ok: true }` whenever `deliverOutboundPayloads()` does not throw, even if it returned an empty delivery list
 
-The implementation should fix the silent-drop class directly and add enough telemetry to explain the exact zero-delivery cause if it ever happens again.
+The implementation should make routed assistant replies depend on actual visible delivery, not just “outbound completed without throwing,” and should reuse the same intentional-noop vs unexpected-zero-delivery model from the first Telegram fix.
 
 ## Key Changes
 
-- In `src/telegram/bot-message-dispatch.ts`, stop using `queuedFinal` as the success condition for a completed Telegram final.
-- Treat `queuedFinal` as diagnostic-only: it means the model/dispatcher produced a final payload and accepted it into the reply queue, not that Telegram delivery succeeded.
-- Track final outcomes explicitly in Telegram dispatch:
-  - `delivered`: at least one Telegram-visible message or finalized preview was actually delivered.
-  - `intentional_noop`: a final was intentionally suppressed and should not trigger fallback.
-  - `unexpected_zero_delivery`: a final was processed but nothing visible was delivered.
-- Trigger the empty-response fallback only for `unexpected_zero_delivery` or explicit dispatch failures, not for intentional suppressions.
-- Keep the detection generic. Do not overfit the fix to hooks; include a catch-all zero-delivery reason such as `unknown_zero_delivery` or `no_visible_delivery`.
-- In `src/telegram/bot/delivery.replies.ts`, return richer delivery outcome metadata instead of only `{ delivered: boolean }`.
-- At minimum, report these post-queue zero-delivery reasons:
+- In `src/infra/outbound/deliver.ts`, add an internal detailed-outcome helper for outbound delivery.
+- Keep the existing `deliverOutboundPayloads()` array return contract for existing callers.
+- Add a sibling internal path that returns both the delivery results and visibility metadata.
+- The metadata must distinguish:
+  - `delivered`
   - `cancelled_by_hook`
   - `empty_after_hooks`
   - `unknown_zero_delivery`
-- Log zero-delivery finals explicitly with enough context to diagnose later: `accountId`, `chatId`, `sessionKey` when available, whether text/media existed, and the resolved zero-delivery reason.
-- Treat reason-specific outcomes this way:
-  - `empty_after_hooks` => `unexpected_zero_delivery` and send fallback.
-  - `cancelled_by_hook` => `intentional_noop`, but emit a structured warning.
-  - heartbeat/silent/no-reply/suppressed-reasoning intentional skips => `intentional_noop`.
-- Update any internal Telegram call sites that consume `deliverReplies()` results so they compile cleanly and preserve current behavior. In particular, cover `src/telegram/bot-native-commands.ts` in addition to the main auto-reply path.
+- Reason precedence when no visible message is delivered:
+  - all cancelled by `message_sending` hook => `cancelled_by_hook`
+  - at least one payload blanked to empty after hooks and none delivered => `empty_after_hooks`
+  - anything else with zero visible delivery => `unknown_zero_delivery`
+- In `src/auto-reply/reply/route-reply.ts`, stop treating “no throw” as delivery success.
+- Keep `ok` for transport/runtime success vs hard failure.
+- Extend `RouteReplyResult` to include:
+  - `delivered: boolean`
+  - `zeroDeliveryReason?: "cancelled_by_hook" | "empty_after_hooks" | "unknown_zero_delivery"`
+  - `messageId?: string`
+- Pre-routing intentional suppressions should return `ok: true`, `delivered: false` without a zero-delivery anomaly:
+  - reasoning-only suppression
+  - silent-token suppression
+  - normalized empty payloads
+- Post-routing zero-delivery must come only from the outbound helper metadata above.
+- Update routed assistant-reply callers to use `delivered`, not just `ok`.
+- `src/auto-reply/reply/followup-runner.ts`
+  - treat queued followup payloads as final assistant delivery for fallback purposes
+  - if routed Telegram delivery is `delivered: false` with `empty_after_hooks` or `unknown_zero_delivery`, immediately send the standard fallback text through the same routed Telegram path
+  - if the routed result is `cancelled_by_hook`, log intentional noop and do not fallback
+  - preserve existing same-channel dispatcher fallback only for actual route failures (`ok: false`)
+- routed final-delivery paths in ACP/config dispatch should use the same rule:
+  - `ok: false` => existing route failure behavior
+  - `ok: true` and `delivered: false` with unexpected zero delivery on Telegram finals => send the standard fallback and log
+  - `cancelled_by_hook` => no fallback, intentional noop log
+  - tool/block routed payloads should never send the empty-response fallback; log only
+- Routed final-count accounting must count actual visible final delivery or fallback delivery, not just `result.ok`.
+- Add explicit routed zero-delivery logging.
+- One structured warning at the route/outbound boundary with:
+  - channel
+  - accountId
+  - destination
+  - sessionKey when available
+  - whether text/media/channelData existed
+  - zero-delivery reason
+- One higher-level log at the routed final caller when a Telegram final becomes:
+  - `unexpected_zero_delivery`
+  - `intentional_noop`
+- Use distinct wording from the direct Telegram-dispatch logs so future incidents show which path failed.
 
 ## Interface Changes
 
-- Internal only: change `deliverReplies()` in `src/telegram/bot/delivery.replies.ts` from a boolean-only result to a delivery outcome object that exposes:
-  - whether anything visible was delivered
-  - a zero-delivery reason when nothing visible was delivered
-- No public CLI, config, or schema changes.
+- Internal only:
+  - add a detailed outbound delivery result/helper in `src/infra/outbound/deliver.ts`
+  - extend `RouteReplyResult` in `src/auto-reply/reply/route-reply.ts` with visible-delivery metadata
+- No public CLI, config, schema, or channel-plugin API changes.
+- Keep `deliverOutboundPayloads()` source-compatible for existing generic callers that only need the raw delivery array.
 
 ## Test Plan
 
-- Add/update Telegram dispatch tests to cover:
-  - final delivery returns zero visible sends without throwing => fallback is sent and the anomaly is logged
-  - final text reply blanked to empty after `message_sending` hooks => fallback is sent and the zero-delivery reason is recorded
-  - final reply cancelled by hook => no fallback, but explicit noop reason is recorded
-  - suppressed reasoning-only final => no fallback and no regression
-  - normal Iris-style direct final text send with streaming off => still sends normally
-  - final delivered via preview finalization path => still counts as delivered and does not fallback
-- Keep or extend the existing Telegram delivery tests that already cover hook blanking/cancellation behavior so the richer return metadata is verified at the `deliverReplies()` layer too.
+- `src/auto-reply/reply/route-reply.test.ts`
+  - zero outbound deliveries without throw => `ok: true`, `delivered: false`, `zeroDeliveryReason: "unknown_zero_delivery"`
+  - hook cancellation => `ok: true`, `delivered: false`, `zeroDeliveryReason: "cancelled_by_hook"`
+  - hook blanking to empty => `ok: true`, `delivered: false`, `zeroDeliveryReason: "empty_after_hooks"`
+  - reasoning/silent/empty pre-routing skips => no anomaly reason and no outbound call
+- `src/infra/outbound/deliver.test.ts`
+  - detailed helper reports `cancelled_by_hook`
+  - detailed helper reports `empty_after_hooks`
+  - detailed helper reports `unknown_zero_delivery` when processing completes with zero visible sends and no throw
+  - normal text/media delivery still reports `delivered: true`
+- Routed final callers
+  - followup queue routed to Telegram returns zero visible delivery without throw => fallback is routed and anomaly is logged
+  - followup queue routed to Telegram cancelled by hook => no fallback, intentional noop log
+  - config-routed final to Telegram zero-delivery => fallback is sent and final-count accounting reflects visible delivery
+  - ACP-routed final to Telegram zero-delivery => fallback is sent and logged
+  - routed tool/block zero-delivery => no empty-response fallback regression
 
 ## Assumptions
 
-- The heartbeat logged immediately after the missing reply is adjacent noise, not the cause of the missing Azure-comments reply.
-- The exact sub-trigger for this incident is still unproven, but the root bug is that Telegram can currently report final success without actual delivery.
-- No external Telegram ownership/filter plugin is active in the live config; only internal hooks are enabled.
-- Heartbeat visibility behavior should remain unchanged.
+- The interrupted heartbeat is adjacent noise again, not the direct cause of the missing Telegram final.
+- The missing follow-up reply most likely used the routed followup/origin path because a new inbound message arrived before the earlier turn completed.
+- The standard fallback text remains `No response generated. Please try again.`
+- Scope is limited to routed assistant replies, especially Telegram finals; this plan does not broaden empty-response fallback behavior across all channels.

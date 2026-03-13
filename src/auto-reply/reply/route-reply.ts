@@ -11,7 +11,9 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveEffectiveMessagesConfig } from "../../agents/identity.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { OutboundZeroDeliveryReason } from "../../infra/outbound/deliver.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
@@ -26,6 +28,8 @@ function loadDeliverRuntime() {
   deliverRuntimePromise ??= import("../../infra/outbound/deliver-runtime.js");
   return deliverRuntimePromise;
 }
+
+const log = createSubsystemLogger("reply/route");
 
 export type RouteReplyParams = {
   /** The reply payload to send. */
@@ -55,6 +59,10 @@ export type RouteReplyParams = {
 export type RouteReplyResult = {
   /** Whether the reply was sent successfully. */
   ok: boolean;
+  /** Whether a visible outbound message was actually delivered. */
+  delivered: boolean;
+  /** Why a routed reply completed without visible delivery. */
+  zeroDeliveryReason?: OutboundZeroDeliveryReason;
   /** Optional message ID from the provider. */
   messageId?: string;
   /** Error message if the send failed. */
@@ -72,7 +80,7 @@ export type RouteReplyResult = {
 export async function routeReply(params: RouteReplyParams): Promise<RouteReplyResult> {
   const { payload, channel, to, accountId, threadId, cfg, abortSignal } = params;
   if (shouldSuppressReasoningPayload(payload)) {
-    return { ok: true };
+    return { ok: true, delivered: false };
   }
   const normalizedChannel = normalizeMessageChannel(channel);
   const resolvedAgentId = params.sessionKey
@@ -96,7 +104,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
     responsePrefix,
   });
   if (!normalized) {
-    return { ok: true };
+    return { ok: true, delivered: false };
   }
 
   let text = normalized.text ?? "";
@@ -109,22 +117,23 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
 
   // Skip empty replies.
   if (!text.trim() && mediaUrls.length === 0) {
-    return { ok: true };
+    return { ok: true, delivered: false };
   }
 
   if (channel === INTERNAL_MESSAGE_CHANNEL) {
     return {
       ok: false,
+      delivered: false,
       error: "Webchat routing not supported for queued replies",
     };
   }
 
   const channelId = normalizeChannelId(channel) ?? null;
   if (!channelId) {
-    return { ok: false, error: `Unknown channel: ${String(channel)}` };
+    return { ok: false, delivered: false, error: `Unknown channel: ${String(channel)}` };
   }
   if (abortSignal?.aborted) {
-    return { ok: false, error: "Reply routing aborted" };
+    return { ok: false, delivered: false, error: "Reply routing aborted" };
   }
 
   const resolvedReplyToId =
@@ -135,13 +144,13 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
   try {
     // Provider docking: this is an execution boundary (we're about to send).
     // Keep the module cheap to import by loading outbound plumbing lazily.
-    const { deliverOutboundPayloads } = await loadDeliverRuntime();
+    const { deliverOutboundPayloadsDetailed } = await loadDeliverRuntime();
     const outboundSession = buildOutboundSessionContext({
       cfg,
       agentId: resolvedAgentId,
       sessionKey: params.sessionKey,
     });
-    const results = await deliverOutboundPayloads({
+    const result = await deliverOutboundPayloadsDetailed({
       cfg,
       channel: channelId,
       to,
@@ -164,12 +173,32 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
           : undefined,
     });
 
-    const last = results.at(-1);
-    return { ok: true, messageId: last?.messageId };
+    const last = result.results.at(-1);
+    if (!result.delivered && result.zeroDeliveryReason) {
+      log.warn("routeReply zero visible delivery", {
+        channel: channelId,
+        accountId: accountId ?? "default",
+        to,
+        sessionKey: params.sessionKey,
+        hasText: text.trim().length > 0,
+        hasMedia: mediaUrls.length > 0,
+        hasChannelData: Boolean(
+          normalized.channelData && Object.keys(normalized.channelData).length > 0,
+        ),
+        zeroDeliveryReason: result.zeroDeliveryReason,
+      });
+    }
+    return {
+      ok: true,
+      delivered: result.delivered,
+      zeroDeliveryReason: result.zeroDeliveryReason,
+      messageId: last?.messageId,
+    };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return {
       ok: false,
+      delivered: false,
       error: `Failed to route reply to ${channel}: ${message}`,
     };
   }

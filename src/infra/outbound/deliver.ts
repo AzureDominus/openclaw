@@ -95,6 +95,17 @@ export type OutboundDeliveryResult = {
   meta?: Record<string, unknown>;
 };
 
+export type OutboundZeroDeliveryReason =
+  | "cancelled_by_hook"
+  | "empty_after_hooks"
+  | "unknown_zero_delivery";
+
+export type OutboundDeliveryDetailedResult = {
+  results: OutboundDeliveryResult[];
+  delivered: boolean;
+  zeroDeliveryReason?: OutboundZeroDeliveryReason;
+};
+
 type Chunker = (text: string, limit: number) => string[];
 
 type ChannelHandler = {
@@ -505,9 +516,41 @@ async function applyMessageSendingHook(params: {
   }
 }
 
+function resolveOutboundZeroDeliveryReason(params: {
+  originalPayloadCount: number;
+  attemptedPayloadCount: number;
+  deliveredCount: number;
+  cancelledByHookCount: number;
+  emptyAfterHooksCount: number;
+}): OutboundZeroDeliveryReason | undefined {
+  if (params.deliveredCount > 0 || params.originalPayloadCount === 0) {
+    return undefined;
+  }
+  if (params.attemptedPayloadCount === 0) {
+    return "unknown_zero_delivery";
+  }
+  if (
+    params.cancelledByHookCount > 0 &&
+    params.cancelledByHookCount === params.attemptedPayloadCount
+  ) {
+    return "cancelled_by_hook";
+  }
+  if (params.emptyAfterHooksCount > 0) {
+    return "empty_after_hooks";
+  }
+  return "unknown_zero_delivery";
+}
+
 export async function deliverOutboundPayloads(
   params: DeliverOutboundPayloadsParams,
 ): Promise<OutboundDeliveryResult[]> {
+  const result = await deliverOutboundPayloadsDetailed(params);
+  return result.results;
+}
+
+export async function deliverOutboundPayloadsDetailed(
+  params: DeliverOutboundPayloadsParams,
+): Promise<OutboundDeliveryDetailedResult> {
   const { channel, to, payloads } = params;
 
   // Write-ahead delivery queue: persist before sending, remove after success.
@@ -549,7 +592,7 @@ export async function deliverOutboundPayloads(
   }
 
   try {
-    const results = await deliverOutboundPayloadsCore(wrappedParams);
+    const result = await deliverOutboundPayloadsCore(wrappedParams);
     if (queueId) {
       if (hadPartialFailure) {
         await failDelivery(queueId, "partial delivery failure (bestEffort)").catch(() => {});
@@ -557,7 +600,7 @@ export async function deliverOutboundPayloads(
         await ackDelivery(queueId).catch(() => {}); // Best-effort cleanup.
       }
     }
-    return results;
+    return result;
   } catch (err) {
     if (queueId) {
       if (isAbortError(err)) {
@@ -575,7 +618,7 @@ export async function deliverOutboundPayloads(
 /** Core delivery logic (extracted for queue wrapper). */
 async function deliverOutboundPayloadsCore(
   params: DeliverOutboundPayloadsCoreParams,
-): Promise<OutboundDeliveryResult[]> {
+): Promise<OutboundDeliveryDetailedResult> {
   const { cfg, channel, to, payloads } = params;
   const accountId = params.accountId;
   const deps = params.deps;
@@ -732,6 +775,8 @@ async function deliverOutboundPayloadsCore(
     },
   });
   const hasMessageSendingHooks = hookRunner?.hasHooks("message_sending") ?? false;
+  let cancelledByHookCount = 0;
+  let emptyAfterHooksCount = 0;
   if (hasMessageSentHooks && params.session?.agentId && !sessionKeyForInternalHooks) {
     log.warn(
       "deliverOutboundPayloads: session.agentId present without session key; internal message:sent hook will be skipped",
@@ -758,6 +803,7 @@ async function deliverOutboundPayloadsCore(
         accountId,
       });
       if (hookResult.cancelled) {
+        cancelledByHookCount += 1;
         continue;
       }
       const effectivePayload = hookResult.payload;
@@ -785,9 +831,21 @@ async function deliverOutboundPayloadsCore(
         } else {
           await sendTextChunks(payloadSummary.text, sendOverrides);
         }
+        const delivered = results.length > beforeCount;
+        if (
+          !delivered &&
+          hasMessageSendingHooks &&
+          !payloadSummary.text.trim() &&
+          !(payload.mediaUrl || (payload.mediaUrls?.length ?? 0) > 0) &&
+          !effectivePayload.channelData &&
+          typeof payload.text === "string" &&
+          payload.text.trim().length > 0
+        ) {
+          emptyAfterHooksCount += 1;
+        }
         const messageId = results.at(-1)?.messageId;
         emitMessageSent({
-          success: results.length > beforeCount,
+          success: delivered,
           content: payloadSummary.text,
           messageId,
         });
@@ -878,5 +936,15 @@ async function deliverOutboundPayloadsCore(
     }
   }
 
-  return results;
+  return {
+    results,
+    delivered: results.length > 0,
+    zeroDeliveryReason: resolveOutboundZeroDeliveryReason({
+      originalPayloadCount: payloads.length,
+      attemptedPayloadCount: normalizedPayloads.length,
+      deliveredCount: results.length,
+      cancelledByHookCount,
+      emptyAfterHooksCount,
+    }),
+  };
 }

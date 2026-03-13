@@ -1,1 +1,1 @@
-export { deliverOutboundPayloads } from "./deliver.js";
+export { deliverOutboundPayloads, deliverOutboundPayloadsDetailed } from "./deliver.js";

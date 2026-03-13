@@ -34,6 +34,7 @@ import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { shouldSuppressReasoningPayload } from "./reply-payloads.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
+import { deliverRoutedFinalReply } from "./routed-final-delivery.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 
 const AUDIO_PLACEHOLDER_RE = /^<media:audio>(\s*\([^)]*\))?$/i;
@@ -282,7 +283,7 @@ export async function dispatchReplyFromConfig(params: {
       let queuedFinal = false;
       let routedFinalCount = 0;
       if (shouldRouteToOriginating && originatingChannel && originatingTo) {
-        const result = await routeReply({
+        const result = await deliverRoutedFinalReply({
           payload,
           channel: originatingChannel,
           to: originatingTo,
@@ -290,11 +291,12 @@ export async function dispatchReplyFromConfig(params: {
           accountId: ctx.AccountId,
           threadId: ctx.MessageThreadId,
           cfg,
+          component: "dispatch_from_config",
           isGroup,
           groupId,
         });
-        queuedFinal = result.ok;
-        if (result.ok) {
+        queuedFinal = result.delivered;
+        if (result.delivered) {
           routedFinalCount += 1;
         }
         if (!result.ok) {
@@ -493,7 +495,7 @@ export async function dispatchReplyFromConfig(params: {
       });
       if (shouldRouteToOriginating && originatingChannel && originatingTo) {
         // Route final reply to originating channel.
-        const result = await routeReply({
+        const result = await deliverRoutedFinalReply({
           payload: ttsReply,
           channel: originatingChannel,
           to: originatingTo,
@@ -501,6 +503,7 @@ export async function dispatchReplyFromConfig(params: {
           accountId: ctx.AccountId,
           threadId: ctx.MessageThreadId,
           cfg,
+          component: "dispatch_from_config",
           isGroup,
           groupId,
         });
@@ -509,8 +512,8 @@ export async function dispatchReplyFromConfig(params: {
             `dispatch-from-config: route-reply (final) failed: ${result.error ?? "unknown error"}`,
           );
         }
-        queuedFinal = result.ok || queuedFinal;
-        if (result.ok) {
+        queuedFinal = result.delivered || queuedFinal;
+        if (result.delivered) {
           routedFinalCount += 1;
         }
       } else {
@@ -545,7 +548,7 @@ export async function dispatchReplyFromConfig(params: {
             audioAsVoice: ttsSyntheticReply.audioAsVoice,
           };
           if (shouldRouteToOriginating && originatingChannel && originatingTo) {
-            const result = await routeReply({
+            const result = await deliverRoutedFinalReply({
               payload: ttsOnlyPayload,
               channel: originatingChannel,
               to: originatingTo,
@@ -553,11 +556,12 @@ export async function dispatchReplyFromConfig(params: {
               accountId: ctx.AccountId,
               threadId: ctx.MessageThreadId,
               cfg,
+              component: "dispatch_from_config",
               isGroup,
               groupId,
             });
-            queuedFinal = result.ok || queuedFinal;
-            if (result.ok) {
+            queuedFinal = result.delivered || queuedFinal;
+            if (result.delivered) {
               routedFinalCount += 1;
             }
             if (!result.ok) {

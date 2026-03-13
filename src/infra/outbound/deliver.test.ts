@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
 const hookMocks = vi.hoisted(() => ({
   runner: {
     hasHooks: vi.fn(() => false),
+    runMessageSending: vi.fn(async () => undefined),
     runMessageSent: vi.fn(async () => {}),
   },
 }));
@@ -77,7 +78,8 @@ vi.mock("../../logging/subsystem.js", () => ({
   },
 }));
 
-const { deliverOutboundPayloads, normalizeOutboundPayloads } = await import("./deliver.js");
+const { deliverOutboundPayloads, deliverOutboundPayloadsDetailed, normalizeOutboundPayloads } =
+  await import("./deliver.js");
 
 const telegramChunkConfig: OpenClawConfig = {
   channels: { telegram: { botToken: "tok-1", textChunkLimit: 2 } },
@@ -199,6 +201,8 @@ describe("deliverOutboundPayloads", () => {
     setActivePluginRegistry(defaultRegistry);
     hookMocks.runner.hasHooks.mockClear();
     hookMocks.runner.hasHooks.mockReturnValue(false);
+    hookMocks.runner.runMessageSending.mockClear();
+    hookMocks.runner.runMessageSending.mockResolvedValue(undefined);
     hookMocks.runner.runMessageSent.mockClear();
     hookMocks.runner.runMessageSent.mockResolvedValue(undefined);
     internalHookMocks.createInternalHookEvent.mockClear();
@@ -1063,6 +1067,77 @@ describe("deliverOutboundPayloads", () => {
       }),
       expect.objectContaining({ channelId: "whatsapp" }),
     );
+  });
+
+  it("reports cancelled_by_hook when all payloads are cancelled by message_sending", async () => {
+    hookMocks.runner.hasHooks.mockImplementation((name: string) => name === "message_sending");
+    hookMocks.runner.runMessageSending.mockResolvedValue({ cancel: true });
+    const sendWhatsApp = vi.fn();
+
+    const result = await deliverOutboundPayloadsDetailed({
+      cfg: {},
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "hi" }],
+      deps: { sendWhatsApp },
+    });
+
+    expect(sendWhatsApp).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      results: [],
+      delivered: false,
+      zeroDeliveryReason: "cancelled_by_hook",
+    });
+  });
+
+  it("reports empty_after_hooks when hooks blank a text-only payload", async () => {
+    hookMocks.runner.hasHooks.mockImplementation(
+      (name: string) => name === "message_sending" || name === "message_sent",
+    );
+    hookMocks.runner.runMessageSending.mockResolvedValue({ content: "" });
+    const sendWhatsApp = vi.fn();
+
+    const result = await deliverOutboundPayloadsDetailed({
+      cfg: {},
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "hi" }],
+      deps: { sendWhatsApp },
+    });
+
+    expect(sendWhatsApp).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      results: [],
+      delivered: false,
+      zeroDeliveryReason: "empty_after_hooks",
+    });
+    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "+1555",
+        content: "",
+        success: false,
+      }),
+      expect.objectContaining({ channelId: "whatsapp" }),
+    );
+  });
+
+  it("reports unknown_zero_delivery when payload normalization leaves nothing visible to send", async () => {
+    const sendWhatsApp = vi.fn();
+
+    const result = await deliverOutboundPayloadsDetailed({
+      cfg: {},
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "   " }],
+      deps: { sendWhatsApp },
+    });
+
+    expect(sendWhatsApp).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      results: [],
+      delivered: false,
+      zeroDeliveryReason: "unknown_zero_delivery",
+    });
   });
 });
 

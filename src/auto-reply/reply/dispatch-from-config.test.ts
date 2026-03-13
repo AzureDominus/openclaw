@@ -11,7 +11,11 @@ import { buildTestCtx } from "./test-ctx.js";
 type AbortResult = { handled: boolean; aborted: boolean; stoppedSubagents?: number };
 
 const mocks = vi.hoisted(() => ({
-  routeReply: vi.fn(async (_params: unknown) => ({ ok: true, messageId: "mock" })),
+  routeReply: vi.fn(async (_params: unknown) => ({
+    ok: true,
+    delivered: true,
+    messageId: "mock",
+  })),
   tryFastAbortFromMessage: vi.fn<() => Promise<AbortResult>>(async () => ({
     handled: false,
     aborted: false,
@@ -210,7 +214,7 @@ describe("dispatchReplyFromConfig", () => {
     acpManagerTesting.resetAcpSessionManagerForTests();
     resetInboundDedupe();
     mocks.routeReply.mockReset();
-    mocks.routeReply.mockResolvedValue({ ok: true, messageId: "mock" });
+    mocks.routeReply.mockResolvedValue({ ok: true, delivered: true, messageId: "mock" });
     acpMocks.listAcpSessionEntries.mockReset().mockResolvedValue([]);
     diagnosticMocks.logMessageQueued.mockClear();
     diagnosticMocks.logMessageProcessed.mockClear();
@@ -291,6 +295,65 @@ describe("dispatchReplyFromConfig", () => {
         groupId: "telegram:999",
       }),
     );
+  });
+
+  it("sends the standard fallback when a routed Telegram final zero-delivers", async () => {
+    setNoAbort();
+    mocks.routeReply
+      .mockResolvedValueOnce({
+        ok: true,
+        delivered: false,
+        zeroDeliveryReason: "unknown_zero_delivery",
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        delivered: true,
+        messageId: "fallback-msg-1",
+      });
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "slack",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:999",
+    });
+
+    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
+    const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(mocks.routeReply).toHaveBeenCalledTimes(2);
+    expect(mocks.routeReply.mock.calls[1]?.[0]).toEqual(
+      expect.objectContaining({
+        payload: { text: "No response generated. Please try again." },
+        channel: "telegram",
+        to: "telegram:999",
+      }),
+    );
+    expect(result.queuedFinal).toBe(true);
+    expect(result.counts.final).toBe(1);
+  });
+
+  it("does not send a fallback when a routed Telegram final is cancelled by hook", async () => {
+    setNoAbort();
+    mocks.routeReply.mockResolvedValueOnce({
+      ok: true,
+      delivered: false,
+      zeroDeliveryReason: "cancelled_by_hook",
+    });
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "slack",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:999",
+    });
+
+    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
+    const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(mocks.routeReply).toHaveBeenCalledTimes(1);
+    expect(result.queuedFinal).toBe(false);
+    expect(result.counts.final).toBe(0);
   });
 
   it("forces suppressTyping when routing to a different originating channel", async () => {

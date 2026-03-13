@@ -29,7 +29,8 @@ import {
   shouldSuppressMessagingToolReplies,
 } from "./reply-payloads.js";
 import { resolveReplyToMode } from "./reply-threading.js";
-import { isRoutableChannel, routeReply } from "./route-reply.js";
+import { isRoutableChannel } from "./route-reply.js";
+import { deliverRoutedFinalReply } from "./routed-final-delivery.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
@@ -95,7 +96,7 @@ export function createFollowupRunner(params: {
 
       // Route to originating channel if set, otherwise fall back to dispatcher.
       if (shouldRouteToOriginating) {
-        const result = await routeReply({
+        const result = await deliverRoutedFinalReply({
           payload,
           channel: originatingChannel,
           to: originatingTo,
@@ -103,6 +104,7 @@ export function createFollowupRunner(params: {
           accountId: queued.originatingAccountId,
           threadId: queued.originatingThreadId,
           cfg: queued.run.config,
+          component: "followup_queue",
         });
         if (!result.ok) {
           const errorMsg = result.error ?? "unknown error";
