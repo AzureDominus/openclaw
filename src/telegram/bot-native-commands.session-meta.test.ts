@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { RuntimeEnv } from "../runtime.js";
 import {
   registerTelegramNativeCommands,
   type RegisterTelegramHandlerParams,
@@ -26,6 +27,9 @@ const sessionMocks = vi.hoisted(() => ({
 }));
 const replyMocks = vi.hoisted(() => ({
   dispatchReplyWithBufferedBlockDispatcher: vi.fn(async () => undefined),
+}));
+const deliveryMocks = vi.hoisted(() => ({
+  deliverReplies: vi.fn(async () => ({ delivered: true })),
 }));
 const sessionBindingMocks = vi.hoisted(() => ({
   resolveByConversation: vi.fn<
@@ -78,7 +82,7 @@ vi.mock("../plugins/commands.js", () => ({
   executePluginCommand: vi.fn(async () => ({ text: "ok" })),
 }));
 vi.mock("./bot/delivery.js", () => ({
-  deliverReplies: vi.fn(async () => ({ delivered: true })),
+  deliverReplies: deliveryMocks.deliverReplies,
 }));
 
 function createDeferred<T>() {
@@ -125,17 +129,19 @@ function registerAndResolveStatusHandler(params: {
   cfg: OpenClawConfig;
   allowFrom?: string[];
   groupAllowFrom?: string[];
+  runtime?: RuntimeEnv;
   resolveTelegramGroupConfig?: RegisterTelegramHandlerParams["resolveTelegramGroupConfig"];
 }): {
   handler: TelegramCommandHandler;
   sendMessage: ReturnType<typeof vi.fn>;
 } {
-  const { cfg, allowFrom, groupAllowFrom, resolveTelegramGroupConfig } = params;
+  const { cfg, allowFrom, groupAllowFrom, runtime, resolveTelegramGroupConfig } = params;
   return registerAndResolveCommandHandlerBase({
     commandName: "status",
     cfg,
     allowFrom: allowFrom ?? ["*"],
     groupAllowFrom: groupAllowFrom ?? [],
+    runtime,
     useAccessGroups: true,
     resolveTelegramGroupConfig,
   });
@@ -146,6 +152,7 @@ function registerAndResolveCommandHandlerBase(params: {
   cfg: OpenClawConfig;
   allowFrom: string[];
   groupAllowFrom: string[];
+  runtime?: RuntimeEnv;
   useAccessGroups: boolean;
   resolveTelegramGroupConfig?: RegisterTelegramHandlerParams["resolveTelegramGroupConfig"];
 }): {
@@ -157,6 +164,7 @@ function registerAndResolveCommandHandlerBase(params: {
     cfg,
     allowFrom,
     groupAllowFrom,
+    runtime,
     useAccessGroups,
     resolveTelegramGroupConfig,
   } = params;
@@ -176,6 +184,7 @@ function registerAndResolveCommandHandlerBase(params: {
       cfg,
       allowFrom,
       groupAllowFrom,
+      runtime,
       useAccessGroups,
       resolveTelegramGroupConfig,
     }),
@@ -191,6 +200,7 @@ function registerAndResolveCommandHandler(params: {
   cfg: OpenClawConfig;
   allowFrom?: string[];
   groupAllowFrom?: string[];
+  runtime?: RuntimeEnv;
   useAccessGroups?: boolean;
   resolveTelegramGroupConfig?: RegisterTelegramHandlerParams["resolveTelegramGroupConfig"];
 }): {
@@ -202,6 +212,7 @@ function registerAndResolveCommandHandler(params: {
     cfg,
     allowFrom,
     groupAllowFrom,
+    runtime,
     useAccessGroups,
     resolveTelegramGroupConfig,
   } = params;
@@ -210,6 +221,7 @@ function registerAndResolveCommandHandler(params: {
     cfg,
     allowFrom: allowFrom ?? [],
     groupAllowFrom: groupAllowFrom ?? [],
+    runtime,
     useAccessGroups: useAccessGroups ?? true,
     resolveTelegramGroupConfig,
   });
@@ -264,6 +276,7 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     sessionMocks.recordSessionMetaFromInbound.mockClear().mockResolvedValue(undefined);
     sessionMocks.resolveStorePath.mockClear().mockReturnValue("/tmp/openclaw-sessions.json");
     replyMocks.dispatchReplyWithBufferedBlockDispatcher.mockClear().mockResolvedValue(undefined);
+    deliveryMocks.deliverReplies.mockClear().mockResolvedValue({ delivered: true });
     sessionBindingMocks.resolveByConversation.mockReset().mockReturnValue(null);
     sessionBindingMocks.touch.mockReset();
   });
@@ -301,6 +314,61 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     await runPromise;
 
     expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends fallback when a native command final reaches zero visible Telegram delivery", async () => {
+    const runtimeLog = vi.fn();
+    replyMocks.dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions }) => {
+        await dispatcherOptions.deliver({ text: "hello" }, { kind: "final" });
+      },
+    );
+    deliveryMocks.deliverReplies
+      .mockResolvedValueOnce({
+        delivered: false,
+        zeroDeliveryReason: "unknown_zero_delivery",
+      })
+      .mockResolvedValueOnce({ delivered: true });
+
+    const { handler } = registerAndResolveStatusHandler({
+      cfg: {},
+      runtime: { log: runtimeLog } as RuntimeEnv,
+    });
+    await handler(buildStatusCommandContext());
+
+    expect(deliveryMocks.deliverReplies).toHaveBeenCalledTimes(2);
+    expect(deliveryMocks.deliverReplies).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        replies: [{ text: "No response generated. Please try again." }],
+      }),
+    );
+    expect(runtimeLog).toHaveBeenCalledWith(
+      expect.stringContaining("telegram slash final reply unexpected_zero_delivery"),
+    );
+  });
+
+  it("does not send fallback when a native command final is intentionally cancelled", async () => {
+    const runtimeLog = vi.fn();
+    replyMocks.dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions }) => {
+        await dispatcherOptions.deliver({ text: "hello" }, { kind: "final" });
+      },
+    );
+    deliveryMocks.deliverReplies.mockResolvedValue({
+      delivered: false,
+      zeroDeliveryReason: "cancelled_by_hook",
+    });
+
+    const { handler } = registerAndResolveStatusHandler({
+      cfg: {},
+      runtime: { log: runtimeLog } as RuntimeEnv,
+    });
+    await handler(buildStatusCommandContext());
+
+    expect(deliveryMocks.deliverReplies).toHaveBeenCalledTimes(1);
+    expect(runtimeLog).toHaveBeenCalledWith(
+      expect.stringContaining("telegram slash final reply intentional_noop"),
+    );
   });
 
   it("routes Telegram native commands through configured ACP topic bindings", async () => {

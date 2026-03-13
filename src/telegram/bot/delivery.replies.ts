@@ -36,6 +36,16 @@ type DeliveryProgress = {
   deliveredCount: number;
 };
 
+export type TelegramZeroDeliveryReason =
+  | "cancelled_by_hook"
+  | "empty_after_hooks"
+  | "unknown_zero_delivery";
+
+export type TelegramDeliverRepliesResult = {
+  delivered: boolean;
+  zeroDeliveryReason?: TelegramZeroDeliveryReason;
+};
+
 type TelegramReplyChannelData = {
   buttons?: TelegramInlineButtons;
   pin?: boolean;
@@ -92,6 +102,24 @@ function markReplyApplied(progress: DeliveryProgress, replyToId?: number): void 
 function markDelivered(progress: DeliveryProgress): void {
   progress.hasDelivered = true;
   progress.deliveredCount += 1;
+}
+
+const ZERO_DELIVERY_REASON_PRIORITY: Record<TelegramZeroDeliveryReason, number> = {
+  cancelled_by_hook: 1,
+  unknown_zero_delivery: 2,
+  empty_after_hooks: 3,
+};
+
+function mergeZeroDeliveryReason(
+  current: TelegramZeroDeliveryReason | undefined,
+  next: TelegramZeroDeliveryReason,
+): TelegramZeroDeliveryReason {
+  if (!current) {
+    return next;
+  }
+  return ZERO_DELIVERY_REASON_PRIORITY[next] >= ZERO_DELIVERY_REASON_PRIORITY[current]
+    ? next
+    : current;
 }
 
 async function deliverTextReply(params: {
@@ -512,11 +540,15 @@ export async function deliverReplies(params: {
   linkPreview?: boolean;
   /** Optional quote text for Telegram reply_parameters. */
   replyQuoteText?: string;
-}): Promise<{ delivered: boolean }> {
+}): Promise<TelegramDeliverRepliesResult> {
   const progress: DeliveryProgress = {
     hasReplied: false,
     hasDelivered: false,
     deliveredCount: 0,
+  };
+  let zeroDeliveryReason: TelegramZeroDeliveryReason | undefined;
+  const recordZeroDeliveryReason = (reason: TelegramZeroDeliveryReason) => {
+    zeroDeliveryReason = mergeZeroDeliveryReason(zeroDeliveryReason, reason);
   };
   const hookRunner = getGlobalHookRunner();
   const hasMessageSendingHooks = hookRunner?.hasHooks("message_sending") ?? false;
@@ -537,9 +569,11 @@ export async function deliverReplies(params: {
     if (!reply?.text && !hasMedia) {
       if (reply?.audioAsVoice) {
         logVerbose("telegram reply has audioAsVoice without media/text; skipping");
+        recordZeroDeliveryReason("unknown_zero_delivery");
         continue;
       }
       params.runtime.error?.(danger("reply missing text/media"));
+      recordZeroDeliveryReason("unknown_zero_delivery");
       continue;
     }
 
@@ -562,6 +596,7 @@ export async function deliverReplies(params: {
         },
       );
       if (hookResult?.cancel) {
+        recordZeroDeliveryReason("cancelled_by_hook");
         continue;
       }
       if (typeof hookResult?.content === "string" && hookResult.content !== rawContent) {
@@ -570,6 +605,8 @@ export async function deliverReplies(params: {
     }
 
     const contentForSentHook = reply.text || "";
+    const emptiedAfterHooks =
+      !hasMedia && rawContent.trim().length > 0 && contentForSentHook.trim().length === 0;
 
     try {
       const deliveredCountBeforeReply = progress.deliveredCount;
@@ -636,6 +673,13 @@ export async function deliverReplies(params: {
             conversationId: params.chatId,
           },
         );
+        if (!deliveredThisReply) {
+          recordZeroDeliveryReason(
+            emptiedAfterHooks ? "empty_after_hooks" : "unknown_zero_delivery",
+          );
+        }
+      } else if (progress.deliveredCount === deliveredCountBeforeReply) {
+        recordZeroDeliveryReason(emptiedAfterHooks ? "empty_after_hooks" : "unknown_zero_delivery");
       }
     } catch (error) {
       if (hasMessageSentHooks) {
@@ -657,5 +701,9 @@ export async function deliverReplies(params: {
     }
   }
 
-  return { delivered: progress.hasDelivered };
+  return {
+    delivered: progress.hasDelivered,
+    zeroDeliveryReason:
+      progress.hasDelivered || !zeroDeliveryReason ? undefined : zeroDeliveryReason,
+  };
 }

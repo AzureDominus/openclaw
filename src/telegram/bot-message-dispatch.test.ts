@@ -145,17 +145,19 @@ describe("dispatchTelegramMessage draft streaming", () => {
     bot?: Bot;
   }) {
     const bot = params.bot ?? createBot();
+    const runtime = createRuntime();
     await dispatchTelegramMessage({
       context: params.context,
       bot,
       cfg: {},
-      runtime: createRuntime(),
+      runtime,
       replyToMode: "first",
       streamMode: params.streamMode ?? "partial",
       textLimit: 4096,
       telegramCfg: params.telegramCfg ?? {},
       opts: { token: "token" },
     });
+    return { bot, runtime };
   }
 
   function createReasoningStreamContext(): TelegramMessageContext {
@@ -1691,6 +1693,59 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
   });
 
+  it("sends fallback when final delivery returns zero visible sends without throwing", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies
+      .mockResolvedValueOnce({
+        delivered: false,
+        zeroDeliveryReason: "unknown_zero_delivery",
+      })
+      .mockResolvedValueOnce({ delivered: true });
+
+    const { runtime } = await dispatchWithContext({
+      context: createContext(),
+      streamMode: "off",
+    });
+
+    expect(deliverReplies).toHaveBeenCalledTimes(2);
+    expect(deliverReplies).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        replies: [
+          expect.objectContaining({
+            text: expect.stringContaining("No response"),
+          }),
+        ],
+      }),
+    );
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("telegram final reply unexpected_zero_delivery"),
+    );
+  });
+
+  it("does not send fallback when final delivery is intentionally cancelled by hook", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({
+      delivered: false,
+      zeroDeliveryReason: "cancelled_by_hook",
+    });
+
+    const { runtime } = await dispatchWithContext({
+      context: createContext(),
+      streamMode: "off",
+    });
+
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("telegram final reply intentional_noop"),
+    );
+  });
+
   it("sends fallback and clears preview when deliver throws (dispatcher swallows error)", async () => {
     const draftStream = createDraftStream();
     createTelegramDraftStream.mockReturnValue(draftStream);
@@ -1706,7 +1761,9 @@ describe("dispatchTelegramMessage draft streaming", () => {
       .mockRejectedValueOnce(new Error("network down"))
       .mockResolvedValueOnce({ delivered: true });
 
-    await expect(dispatchWithContext({ context: createContext() })).resolves.toBeUndefined();
+    await expect(dispatchWithContext({ context: createContext() })).resolves.toMatchObject({
+      runtime: expect.any(Object),
+    });
     // Fallback should be sent because failedDeliveries > 0
     expect(deliverReplies).toHaveBeenCalledTimes(2);
     expect(deliverReplies).toHaveBeenLastCalledWith(

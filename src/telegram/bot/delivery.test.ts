@@ -56,7 +56,7 @@ function createBot(api: Record<string, unknown> = {}): Bot {
 }
 
 async function deliverWith(params: DeliverWithParams) {
-  await deliverReplies({
+  return await deliverReplies({
     ...baseDeliveryParams,
     ...params,
   });
@@ -152,17 +152,42 @@ describe("deliverReplies", () => {
     const sendMessage = vi.fn();
     const bot = createBot({ sendMessage });
 
-    await deliverWith({
+    const result = await deliverWith({
       replies: [{ text: "hello" }],
       runtime,
       bot,
     });
 
     expect(sendMessage).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      delivered: false,
+      zeroDeliveryReason: "empty_after_hooks",
+    });
     expect(messageHookRunner.runMessageSent).toHaveBeenCalledWith(
       expect.objectContaining({ success: false, content: "" }),
       expect.objectContaining({ channelId: "telegram", conversationId: "123" }),
     );
+  });
+
+  it("returns cancelled_by_hook when message_sending cancels a text-only reply", async () => {
+    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sending");
+    messageHookRunner.runMessageSending.mockResolvedValue({ cancel: true });
+
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn();
+    const bot = createBot({ sendMessage });
+
+    const result = await deliverWith({
+      replies: [{ text: "hello" }],
+      runtime,
+      bot,
+    });
+
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      delivered: false,
+      zeroDeliveryReason: "cancelled_by_hook",
+    });
   });
 
   it("passes accountId into message hooks", async () => {

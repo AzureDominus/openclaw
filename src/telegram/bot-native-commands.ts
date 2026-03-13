@@ -54,7 +54,7 @@ import {
 } from "./bot-native-command-menu.js";
 import { TelegramUpdateKeyContext } from "./bot-updates.js";
 import { TelegramBotOptions } from "./bot.js";
-import { deliverReplies } from "./bot/delivery.js";
+import { deliverReplies, type TelegramZeroDeliveryReason } from "./bot/delivery.js";
 import {
   buildTelegramThreadParams,
   buildSenderName,
@@ -725,9 +725,27 @@ export const registerTelegramNativeCommands = ({
               ? !telegramCfg.blockStreaming
               : undefined;
 
-          const deliveryState = {
+          const finalDeliveryState: {
+            delivered: boolean;
+            skippedNonSilent: number;
+            failedNonSilent: number;
+            unexpectedZeroDeliveryReason?: TelegramZeroDeliveryReason;
+            intentionalNoopReason?: string;
+          } = {
             delivered: false,
             skippedNonSilent: 0,
+            failedNonSilent: 0,
+          };
+          const noteUnexpectedFinalZeroDelivery = (reason?: TelegramZeroDeliveryReason) => {
+            const resolved = reason ?? "unknown_zero_delivery";
+            if (resolved === "cancelled_by_hook") {
+              finalDeliveryState.intentionalNoopReason ??= resolved;
+              return;
+            }
+            finalDeliveryState.unexpectedZeroDeliveryReason =
+              resolved === "empty_after_hooks"
+                ? resolved
+                : (finalDeliveryState.unexpectedZeroDeliveryReason ?? resolved);
           };
 
           const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
@@ -749,21 +767,32 @@ export const registerTelegramNativeCommands = ({
                 accountId: route.accountId,
                 threadId: threadSpec.id ?? null,
               },
-              deliver: async (payload, _info) => {
+              deliver: async (payload, info) => {
                 const result = await deliverReplies({
                   replies: [payload],
                   ...deliveryBaseOptions,
                 });
-                if (result.delivered) {
-                  deliveryState.delivered = true;
+                if (info.kind === "final") {
+                  if (result.delivered) {
+                    finalDeliveryState.delivered = true;
+                  } else {
+                    noteUnexpectedFinalZeroDelivery(result.zeroDeliveryReason);
+                  }
                 }
               },
               onSkip: (_payload, info) => {
-                if (info.reason !== "silent") {
-                  deliveryState.skippedNonSilent += 1;
+                if (info.kind === "final") {
+                  if (info.reason === "silent" || info.reason === "heartbeat") {
+                    finalDeliveryState.intentionalNoopReason ??= info.reason;
+                    return;
+                  }
+                  finalDeliveryState.skippedNonSilent += 1;
                 }
               },
               onError: (err, info) => {
+                if (info.kind === "final") {
+                  finalDeliveryState.failedNonSilent += 1;
+                }
                 runtime.error?.(danger(`telegram slash ${info.kind} reply failed: ${String(err)}`));
               },
             },
@@ -773,7 +802,23 @@ export const registerTelegramNativeCommands = ({
               onModelSelected,
             },
           });
-          if (!deliveryState.delivered && deliveryState.skippedNonSilent > 0) {
+          if (finalDeliveryState.intentionalNoopReason === "cancelled_by_hook") {
+            runtime.log?.(
+              `telegram slash final reply intentional_noop account=${route.accountId ?? "default"} chat=${String(chatId)} session=${ctxPayload.SessionKey ?? "unknown"} reason=${finalDeliveryState.intentionalNoopReason}`,
+            );
+          }
+          if (finalDeliveryState.unexpectedZeroDeliveryReason) {
+            runtime.log?.(
+              `telegram slash final reply unexpected_zero_delivery account=${route.accountId ?? "default"} chat=${String(chatId)} session=${ctxPayload.SessionKey ?? "unknown"} reason=${finalDeliveryState.unexpectedZeroDeliveryReason}`,
+            );
+          }
+          if (
+            !finalDeliveryState.delivered &&
+            !finalDeliveryState.intentionalNoopReason &&
+            (finalDeliveryState.skippedNonSilent > 0 ||
+              finalDeliveryState.failedNonSilent > 0 ||
+              Boolean(finalDeliveryState.unexpectedZeroDeliveryReason))
+          ) {
             await deliverReplies({
               replies: [{ text: EMPTY_RESPONSE_FALLBACK }],
               ...deliveryBaseOptions,

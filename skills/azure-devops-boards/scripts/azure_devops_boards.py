@@ -71,6 +71,41 @@ def workitems_batch(org: str, ids: List[int], fields: Optional[List[str]] = None
     return api_request(org, "/_apis/wit/workitemsbatch?api-version=7.1", method="POST", data=payload).get("value", [])
 
 
+def simplify_comment(comment: Dict[str, Any]) -> Dict[str, Any]:
+    created_by = comment.get("createdBy") or {}
+    modified_by = comment.get("modifiedBy") or {}
+    return {
+        "id": comment.get("id"),
+        "text": comment.get("text"),
+        "createdBy": created_by.get("displayName") or created_by.get("uniqueName"),
+        "createdDate": comment.get("createdDate"),
+        "modifiedBy": modified_by.get("displayName") or modified_by.get("uniqueName"),
+        "modifiedDate": comment.get("modifiedDate"),
+    }
+
+
+def get_comments(org: str, project: str, work_item_id: int, top: int = 50) -> List[Dict[str, Any]]:
+    result = api_request(
+        org,
+        f"/{quote_project(project)}/_apis/wit/workItems/{work_item_id}/comments?$top={top}&api-version=7.1-preview.4",
+        method="GET",
+    )
+    return [simplify_comment(comment) for comment in result.get("comments", [])]
+
+
+def add_comment(org: str, project: str, work_item_id: int, text: str, dry_run: bool = False) -> Dict[str, Any]:
+    payload = {"text": text}
+    if dry_run:
+        return {"action": "add-comment", "project": project, "workItemId": work_item_id, "text": text}
+    result = api_request(
+        org,
+        f"/{quote_project(project)}/_apis/wit/workItems/{work_item_id}/comments?api-version=7.1-preview.4",
+        method="POST",
+        data=payload,
+    )
+    return {"action": "add-comment", "comment": simplify_comment(result)}
+
+
 def list_stories(org: str, project: str, include_closed: bool = False) -> List[Dict[str, Any]]:
     state_filter = "" if include_closed else " And [System.State] <> 'Closed'"
     wiql = {
@@ -218,6 +253,18 @@ def cmd_list(args: argparse.Namespace) -> None:
     print(json.dumps(stories, indent=2))
 
 
+def cmd_get_comments(args: argparse.Namespace) -> None:
+    org = resolve_org(args.org)
+    comments = get_comments(org, args.project, args.work_item_id, top=args.top)
+    print(json.dumps(comments, indent=2))
+
+
+def cmd_add_comment(args: argparse.Namespace) -> None:
+    org = resolve_org(args.org)
+    result = add_comment(org, args.project, args.work_item_id, args.text, dry_run=args.dry_run)
+    print(json.dumps(result, indent=2))
+
+
 def cmd_upsert(args: argparse.Namespace) -> None:
     org = resolve_org(args.org)
     story = {
@@ -252,6 +299,19 @@ def build_parser() -> argparse.ArgumentParser:
     p_list.add_argument("--project", required=True)
     p_list.add_argument("--include-closed", action="store_true")
     p_list.set_defaults(func=cmd_list)
+
+    p_get_comments = sub.add_parser("get-comments", help="List comments for a work item")
+    p_get_comments.add_argument("--project", required=True)
+    p_get_comments.add_argument("--work-item-id", type=int, required=True)
+    p_get_comments.add_argument("--top", type=int, default=50)
+    p_get_comments.set_defaults(func=cmd_get_comments)
+
+    p_add_comment = sub.add_parser("add-comment", help="Add a comment to a work item")
+    p_add_comment.add_argument("--project", required=True)
+    p_add_comment.add_argument("--work-item-id", type=int, required=True)
+    p_add_comment.add_argument("--text", required=True)
+    p_add_comment.add_argument("--dry-run", action="store_true")
+    p_add_comment.set_defaults(func=cmd_add_comment)
 
     p_upsert = sub.add_parser("upsert-story", help="Create or update one User Story by title")
     p_upsert.add_argument("--project", required=True)

@@ -26,7 +26,11 @@ import { getAgentScopedMediaLocalRoots } from "../media/local-roots.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import type { TelegramBotOptions } from "./bot.js";
-import { deliverReplies } from "./bot/delivery.js";
+import {
+  deliverReplies,
+  type TelegramDeliverRepliesResult,
+  type TelegramZeroDeliveryReason,
+} from "./bot/delivery.js";
 import type { TelegramStreamMode } from "./bot/types.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
@@ -108,6 +112,35 @@ type DispatchTelegramMessageParams = {
 };
 
 type TelegramReasoningLevel = "off" | "on" | "stream";
+
+type FinalDeliveryState = {
+  attempted: boolean;
+  delivered: boolean;
+  failedNonSilent: number;
+  skippedNonSilent: number;
+  hadText: boolean;
+  hadMedia: boolean;
+  intentionalNoopReason?: string;
+  zeroDeliveryReason?: TelegramZeroDeliveryReason;
+};
+
+const ZERO_DELIVERY_REASON_PRIORITY: Record<TelegramZeroDeliveryReason, number> = {
+  cancelled_by_hook: 1,
+  unknown_zero_delivery: 2,
+  empty_after_hooks: 3,
+};
+
+function mergeZeroDeliveryReason(
+  current: TelegramZeroDeliveryReason | undefined,
+  next: TelegramZeroDeliveryReason,
+): TelegramZeroDeliveryReason {
+  if (!current) {
+    return next;
+  }
+  return ZERO_DELIVERY_REASON_PRIORITY[next] >= ZERO_DELIVERY_REASON_PRIORITY[current]
+    ? next
+    : current;
+}
 
 function resolveTelegramReasoningLevel(params: {
   cfg: OpenClawConfig;
@@ -454,12 +487,96 @@ export const dispatchTelegramMessage = async ({
     }
     return { ...payload, text };
   };
+  const finalDeliveryState: FinalDeliveryState = {
+    attempted: false,
+    delivered: false,
+    failedNonSilent: 0,
+    skippedNonSilent: 0,
+    hadText: false,
+    hadMedia: false,
+  };
+  let lastSendPayloadResult: TelegramDeliverRepliesResult | undefined;
+  const noteFinalAttempt = (payload: ReplyPayload) => {
+    finalDeliveryState.attempted = true;
+    if (typeof payload.text === "string" && payload.text.trim().length > 0) {
+      finalDeliveryState.hadText = true;
+    }
+    if (payload.mediaUrl || (payload.mediaUrls?.length ?? 0) > 0) {
+      finalDeliveryState.hadMedia = true;
+    }
+  };
+  const noteFinalDelivered = () => {
+    finalDeliveryState.delivered = true;
+    finalDeliveryState.zeroDeliveryReason = undefined;
+    finalDeliveryState.intentionalNoopReason = undefined;
+  };
+  const noteFinalIntentionalNoop = (reason: string) => {
+    if (finalDeliveryState.delivered) {
+      return;
+    }
+    finalDeliveryState.intentionalNoopReason ??= reason;
+  };
+  const noteFinalZeroDelivery = (reason?: TelegramZeroDeliveryReason) => {
+    if (finalDeliveryState.delivered) {
+      return;
+    }
+    const resolved = reason ?? "unknown_zero_delivery";
+    if (resolved === "cancelled_by_hook") {
+      noteFinalIntentionalNoop(resolved);
+      return;
+    }
+    finalDeliveryState.zeroDeliveryReason = mergeZeroDeliveryReason(
+      finalDeliveryState.zeroDeliveryReason,
+      resolved,
+    );
+  };
+  const noteFinalSendOutcome = (result?: TelegramDeliverRepliesResult) => {
+    if (!result) {
+      noteFinalZeroDelivery("unknown_zero_delivery");
+      return;
+    }
+    if (result.delivered) {
+      noteFinalDelivered();
+      return;
+    }
+    noteFinalZeroDelivery(result.zeroDeliveryReason);
+  };
+  const takeLastSendPayloadResult = () => {
+    const result = lastSendPayloadResult;
+    lastSendPayloadResult = undefined;
+    return result;
+  };
+  const sessionKey =
+    typeof ctxPayload.SessionKey === "string" && ctxPayload.SessionKey.trim().length > 0
+      ? ctxPayload.SessionKey
+      : undefined;
+  const logFinalDeliveryAnomaly = (kind: "intentional_noop" | "unexpected_zero_delivery") => {
+    const reason =
+      kind === "intentional_noop"
+        ? finalDeliveryState.intentionalNoopReason
+        : finalDeliveryState.zeroDeliveryReason;
+    if (!reason) {
+      return;
+    }
+    const parts = [
+      `telegram final reply ${kind}`,
+      `account=${route.accountId ?? "default"}`,
+      `chat=${String(chatId)}`,
+      `session=${sessionKey ?? "unknown"}`,
+      `queuedFinal=${queuedFinal ? "true" : "false"}`,
+      `reason=${reason}`,
+      `hadText=${finalDeliveryState.hadText ? "true" : "false"}`,
+      `hadMedia=${finalDeliveryState.hadMedia ? "true" : "false"}`,
+    ];
+    runtime.log?.(parts.join(" "));
+  };
   const sendPayload = async (payload: ReplyPayload) => {
     const result = await deliverReplies({
       ...deliveryBaseOptions,
       replies: [payload],
       onVoiceRecording: sendRecordVoice,
     });
+    lastSendPayloadResult = result;
     if (result.delivered) {
       deliveryState.markDelivered();
     }
@@ -529,6 +646,7 @@ export const dispatchTelegramMessage = async ({
         },
         deliver: async (payload, info) => {
           if (info.kind === "final") {
+            noteFinalAttempt(payload);
             // Assistant callbacks are fire-and-forget; ensure queued boundary
             // rotations/partials are applied before final delivery mapping.
             await enqueueDraftLaneEvent(async () => {});
@@ -550,13 +668,18 @@ export const dispatchTelegramMessage = async ({
                 | { buttons?: TelegramInlineButtons }
                 | undefined
             )?.buttons;
-            await deliverLaneText({
+            const result = await deliverLaneText({
               laneName: "answer",
               text: buffered.text,
               payload: buffered.payload,
               infoKind: "final",
               previewButtons: bufferedButtons,
             });
+            if (result === "skipped") {
+              noteFinalSendOutcome(takeLastSendPayloadResult());
+            } else {
+              noteFinalDelivered();
+            }
             reasoningStepState.resetForNextStep();
           };
 
@@ -582,12 +705,22 @@ export const dispatchTelegramMessage = async ({
             });
             if (segment.lane === "reasoning") {
               if (result !== "skipped") {
+                if (info.kind === "final") {
+                  noteFinalDelivered();
+                }
                 reasoningStepState.noteReasoningDelivered();
                 await flushBufferedFinalAnswer();
+              } else if (info.kind === "final") {
+                noteFinalSendOutcome(takeLastSendPayloadResult());
               }
               continue;
             }
             if (info.kind === "final") {
+              if (result === "skipped") {
+                noteFinalSendOutcome(takeLastSendPayloadResult());
+              } else {
+                noteFinalDelivered();
+              }
               if (reasoningLane.hasStreamedMessage) {
                 finalizedPreviewByLane.reasoning = true;
               }
@@ -601,10 +734,24 @@ export const dispatchTelegramMessage = async ({
             if (hasMedia) {
               const payloadWithoutSuppressedReasoning =
                 typeof payload.text === "string" ? { ...payload, text: "" } : payload;
-              await sendPayload(payloadWithoutSuppressedReasoning);
+              const delivered = await sendPayload(payloadWithoutSuppressedReasoning);
+              if (info.kind === "final") {
+                if (delivered) {
+                  noteFinalDelivered();
+                } else {
+                  noteFinalSendOutcome(takeLastSendPayloadResult());
+                }
+              }
             }
             if (info.kind === "final") {
               await flushBufferedFinalAnswer();
+              if (
+                !hasMedia &&
+                !finalDeliveryState.delivered &&
+                !finalDeliveryState.zeroDeliveryReason
+              ) {
+                noteFinalIntentionalNoop("suppressed_reasoning_only");
+              }
             }
             return;
           }
@@ -619,10 +766,28 @@ export const dispatchTelegramMessage = async ({
           if (!canSendAsIs) {
             if (info.kind === "final") {
               await flushBufferedFinalAnswer();
+              if (
+                !finalDeliveryState.delivered &&
+                !finalDeliveryState.intentionalNoopReason &&
+                !finalDeliveryState.zeroDeliveryReason
+              ) {
+                if (!finalDeliveryState.hadText && !finalDeliveryState.hadMedia) {
+                  noteFinalIntentionalNoop("empty_final_payload");
+                } else {
+                  noteFinalZeroDelivery("unknown_zero_delivery");
+                }
+              }
             }
             return;
           }
-          await sendPayload(payload);
+          const delivered = await sendPayload(payload);
+          if (info.kind === "final") {
+            if (delivered) {
+              noteFinalDelivered();
+            } else {
+              noteFinalSendOutcome(takeLastSendPayloadResult());
+            }
+          }
           if (info.kind === "final") {
             await flushBufferedFinalAnswer();
           }
@@ -631,9 +796,19 @@ export const dispatchTelegramMessage = async ({
           if (info.reason !== "silent") {
             deliveryState.markNonSilentSkip();
           }
+          if (info.kind === "final") {
+            if (info.reason === "silent" || info.reason === "heartbeat") {
+              noteFinalIntentionalNoop(info.reason);
+            } else {
+              finalDeliveryState.skippedNonSilent += 1;
+            }
+          }
         },
         onError: (err, info) => {
           deliveryState.markNonSilentFailure();
+          if (info.kind === "final") {
+            finalDeliveryState.failedNonSilent += 1;
+          }
           runtime.error?.(danger(`telegram ${info.kind} reply failed: ${String(err)}`));
         },
       },
@@ -761,11 +936,32 @@ export const dispatchTelegramMessage = async ({
     }
   }
   let sentFallback = false;
-  const deliverySummary = deliveryState.snapshot();
+  if (
+    queuedFinal &&
+    !dispatchError &&
+    !finalDeliveryState.delivered &&
+    !finalDeliveryState.intentionalNoopReason &&
+    !finalDeliveryState.zeroDeliveryReason
+  ) {
+    if (!finalDeliveryState.hadText && !finalDeliveryState.hadMedia) {
+      noteFinalIntentionalNoop("empty_final_payload");
+    } else {
+      noteFinalZeroDelivery("unknown_zero_delivery");
+    }
+  }
+  if (finalDeliveryState.intentionalNoopReason === "cancelled_by_hook") {
+    logFinalDeliveryAnomaly("intentional_noop");
+  }
+  if (finalDeliveryState.zeroDeliveryReason) {
+    logFinalDeliveryAnomaly("unexpected_zero_delivery");
+  }
   if (
     dispatchError ||
-    (!deliverySummary.delivered &&
-      (deliverySummary.skippedNonSilent > 0 || deliverySummary.failedNonSilent > 0))
+    (!finalDeliveryState.delivered &&
+      !finalDeliveryState.intentionalNoopReason &&
+      (finalDeliveryState.skippedNonSilent > 0 ||
+        finalDeliveryState.failedNonSilent > 0 ||
+        Boolean(finalDeliveryState.zeroDeliveryReason)))
   ) {
     const fallbackText = dispatchError
       ? "Something went wrong while processing your request. Please try again."
@@ -777,7 +973,10 @@ export const dispatchTelegramMessage = async ({
     sentFallback = result.delivered;
   }
 
-  const hasFinalResponse = queuedFinal || sentFallback;
+  const hasFinalResponse =
+    finalDeliveryState.delivered ||
+    Boolean(finalDeliveryState.intentionalNoopReason) ||
+    sentFallback;
 
   if (statusReactionController && !hasFinalResponse) {
     void statusReactionController.setError().catch((err) => {
