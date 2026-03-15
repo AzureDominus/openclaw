@@ -22,6 +22,7 @@ import { createEmbeddedCallGateway } from "./tools/embedded-gateway-stub.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 import { createImageGenerateTool } from "./tools/image-generate-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
+import { createJsReplResetTool, createJsReplTool } from "./tools/js-repl-tool.js";
 import { createMessageTool } from "./tools/message-tool.js";
 import { createMusicGenerateTool } from "./tools/music-generate-tool.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
@@ -327,6 +328,16 @@ export function createOpenClawTools(
       agentSessionKey: options?.agentSessionKey,
       config: resolvedConfig,
       sandboxed: options?.sandboxed,
+    }),
+    createJsReplTool({
+      sessionId: options?.sessionId,
+      agentSessionKey: options?.agentSessionKey,
+      workspaceDir,
+      getTools: () => tools,
+    }),
+    createJsReplResetTool({
+      sessionId: options?.sessionId,
+      agentSessionKey: options?.agentSessionKey,
     }),
     ...collectPresentOpenClawTools([webSearchTool, webFetchTool, imageTool, pdfTool]),
   ];

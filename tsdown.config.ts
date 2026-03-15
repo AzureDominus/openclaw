@@ -263,6 +263,8 @@ function buildUnifiedDistEntries(): Record<string, string> {
       : {}),
     ...listBundledPluginEntrySources(rootBundledPluginBuildEntries),
     ...bundledHookEntries,
+    // Keep js_repl worker as a concrete dist file so the bundled runtime can spawn it.
+    "agents/tools/js-repl-worker": "src/agents/tools/js-repl-worker.ts",
   };
 }
 
