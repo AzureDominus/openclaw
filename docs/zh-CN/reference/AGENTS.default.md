@@ -109,7 +109,7 @@ git commit -m "Add Clawd workspace"
 - **imsg** — 发送、读取、流式传输 iMessage 和短信。
 - **wacli** — WhatsApp CLI：同步、搜索、发送。
 - **discord** — Discord 操作：回应、贴纸、投票。使用 `user:<id>` 或 `channel:<id>` 目标（纯数字 id 有歧义）。
-- **gog** — Google Suite CLI：Gmail、日历、云端硬盘、通讯录。
+- **gws** — Google Workspace CLI：Gmail、日历、通讯录、表格、文档、幻灯片、任务，以及可选的云端硬盘。
 - **spotify-player** — 终端 Spotify 客户端，用于搜索/排队/控制播放。
 - **sag** — 具有 mac 风格 say UX 的 ElevenLabs 语音；默认流式输出到扬声器。
 - **Sonos CLI** — 从脚本控制 Sonos 扬声器（发现/状态/播放/音量/分组）。

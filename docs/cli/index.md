@@ -512,12 +512,14 @@ Subcommands:
 
 ### `webhooks gmail`
 
-Gmail Pub/Sub hook setup + runner. See [/automation/gmail-pubsub](/automation/gmail-pubsub).
+Legacy Gmail Pub/Sub watcher commands. OpenClaw still accepts `POST /hooks/gmail`
+from an external ingestor. See [/automation/webhook](/automation/webhook) and
+[/automation/gmail-pubsub](/automation/gmail-pubsub).
 
 Subcommands:
 
-- `webhooks gmail setup` (requires `--account <email>`; supports `--project`, `--topic`, `--subscription`, `--label`, `--hook-url`, `--hook-token`, `--push-token`, `--bind`, `--port`, `--path`, `--include-body`, `--max-bytes`, `--renew-minutes`, `--tailscale`, `--tailscale-path`, `--tailscale-target`, `--push-endpoint`, `--json`)
-- `webhooks gmail run` (runtime overrides for the same flags)
+- `webhooks gmail setup` (removed; prints migration guidance)
+- `webhooks gmail run` (removed; prints migration guidance)
 
 ### `dns setup`
 

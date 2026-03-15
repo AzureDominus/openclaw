@@ -3116,54 +3116,24 @@ openclaw gateway --port 19001
 - 如果没有先前的投递路由，请显式设置 `channel` + `to`（Telegram/Discord/Google Chat/Slack/Signal/iMessage/MS Teams 必需）。
 - `model` 覆盖此 hook 运行的 LLM（`provider/model` 或别名；如果设置了 `agents.defaults.models` 则必须被允许）。
 
-Gmail 辅助配置（由 `openclaw webhooks gmail setup` / `run` 使用）：
+Gmail 集成：
 
 ```json5
 {
   hooks: {
     gmail: {
-      account: "openclaw@gmail.com",
-      topic: "projects/<project-id>/topics/gog-gmail-watch",
-      subscription: "gog-gmail-watch-push",
-      pushToken: "shared-push-token",
-      hookUrl: "http://127.0.0.1:18789/hooks/gmail",
-      includeBody: true,
-      maxBytes: 20000,
-      renewEveryMinutes: 720,
-      serve: { bind: "127.0.0.1", port: 8788, path: "/" },
-      tailscale: { mode: "funnel", path: "/gmail-pubsub" },
-
-      // 可选：为 Gmail hook 处理使用更便宜的模型
-      // 在认证/速率限制/超时时回退到 agents.defaults.model.fallbacks，然后 primary
       model: "openrouter/meta-llama/llama-3.3-70b-instruct:free",
-      // 可选：Gmail hook 的默认思考级别
       thinking: "off",
     },
   },
 }
 ```
 
-Gmail hook 的模型覆盖：
-
-- `hooks.gmail.model` 指定用于 Gmail hook 处理的模型（默认为会话主模型）。
-- 接受 `provider/model` 引用或来自 `agents.defaults.models` 的别名。
-- 在认证/速率限制/超时时回退到 `agents.defaults.model.fallbacks`，然后 `agents.defaults.model.primary`。
-- 如果设置了 `agents.defaults.models`，请将 hooks 模型包含在白名单中。
-- 启动时，如果配置的模型不在模型目录或白名单中，会发出警告。
-- `hooks.gmail.thinking` 设置 Gmail hook 的默认思考级别，被每 hook 的 `thinking` 覆盖。
-
-Gateway 网关自动启动：
-
-- 如果 `hooks.enabled=true` 且 `hooks.gmail.account` 已设置，Gateway 网关在启动时
-  启动 `gog gmail watch serve` 并自动续期监视。
-- 设置 `OPENCLAW_SKIP_GMAIL_WATCHER=1` 禁用自动启动（用于手动运行）。
-- 避免在 Gateway 网关旁边单独运行 `gog gmail watch serve`；它会
-  因 `listen tcp 127.0.0.1:8788: bind: address already in use` 而失败。
-
-注意：当 `tailscale.mode` 开启时，OpenClaw 将 `serve.path` 默认为 `/`，以便
-Tailscale 可以正确代理 `/gmail-pubsub`（它会去除设置的路径前缀）。
-如果你需要后端接收带前缀的路径，请将
-`hooks.gmail.tailscale.target` 设为完整 URL（并对齐 `serve.path`）。
+- 仍然支持来自外部接入器的 `POST /hooks/gmail`。
+- Gateway 网关不再启动或管理 Gmail Pub/Sub watcher。
+- 为兼容旧配置，`hooks.gmail` 下的 `account`、`label`、`topic`、`subscription`、
+  `pushToken`、`hookUrl`、`includeBody`、`maxBytes`、`renewEveryMinutes`、
+  `serve.*` 和 `tailscale.*` 字段仍会被接受，但当前 Gateway 构建会忽略它们。
 
 ### `canvasHost`（LAN/tailnet Canvas 文件服务器 + 实时重载）
 

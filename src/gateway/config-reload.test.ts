@@ -123,10 +123,9 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.restartReasons).toContain("gateway.port");
   });
 
-  it("restarts the Gmail watcher for hooks.gmail changes", () => {
+  it("hot-reloads hooks for hooks.gmail changes", () => {
     const plan = buildGatewayReloadPlan(["hooks.gmail.account"]);
     expect(plan.restartGateway).toBe(false);
-    expect(plan.restartGmailWatcher).toBe(true);
     expect(plan.reloadHooks).toBe(true);
   });
 
@@ -208,7 +207,6 @@ describe("buildGatewayReloadPlan", () => {
       path: "hooks.gmail.account",
       expectRestartGateway: false,
       expectHotPath: "hooks.gmail.account",
-      expectRestartGmailWatcher: true,
       expectReloadHooks: true,
     },
     {
@@ -235,9 +233,6 @@ describe("buildGatewayReloadPlan", () => {
     }
     if (testCase.expectRestartHealthMonitor) {
       expect(plan.restartHealthMonitor).toBe(true);
-    }
-    if (testCase.expectRestartGmailWatcher) {
-      expect(plan.restartGmailWatcher).toBe(true);
     }
     if (testCase.expectReloadHooks) {
       expect(plan.reloadHooks).toBe(true);

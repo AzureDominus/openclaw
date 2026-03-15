@@ -71,7 +71,7 @@ AI triggers the workflow; Lobster executes the steps. Approval gates keep side e
 Example: map input items into tool calls:
 
 ```bash
-gog.gmail.search --query 'newer_than:1d' \
+gws gmail users.messages.list --params '{"userId":"me","q":"newer_than:1d"}' \
   | openclaw.invoke --tool message --action send --each --item-key message --args-json '{"provider":"telegram","to":"..."}'
 ```
 
@@ -255,7 +255,7 @@ Run a pipeline in tool mode.
 ```json
 {
   "action": "run",
-  "pipeline": "gog.gmail.search --query 'newer_than:1d' | email.triage",
+  "pipeline": "gws gmail users.messages.list --params '{\"userId\":\"me\",\"q\":\"newer_than:1d\"}' | email.triage",
   "cwd": "workspace",
   "timeoutMs": 30000,
   "maxStdoutBytes": 512000

@@ -78,7 +78,7 @@ AI 触发工作流；Lobster 执行步骤。审批关卡使副作用显式且可
 示例：将输入项映射到工具调用：
 
 ```bash
-gog.gmail.search --query 'newer_than:1d' \
+gws gmail users.messages.list --params '{"userId":"me","q":"newer_than:1d"}' \
   | openclaw.invoke --tool message --action send --each --item-key message --args-json '{"provider":"telegram","to":"..."}'
 ```
 
@@ -262,7 +262,7 @@ Lobster 是一个**可选**的插件工具（默认未启用）。
 ```json
 {
   "action": "run",
-  "pipeline": "gog.gmail.search --query 'newer_than:1d' | email.triage",
+  "pipeline": "gws gmail users.messages.list --params '{\"userId\":\"me\",\"q\":\"newer_than:1d\"}' | email.triage",
   "cwd": "/path/to/workspace",
   "timeoutMs": 30000,
   "maxStdoutBytes": 512000

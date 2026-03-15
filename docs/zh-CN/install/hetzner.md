@@ -213,7 +213,7 @@ services:
 
 以下示例仅展示三个常见二进制文件：
 
-- `gog` 用于 Gmail 访问
+- `gws` 用于 Google Workspace 访问
 - `goplaces` 用于 Google Places
 - `wacli` 用于 WhatsApp
 
@@ -233,9 +233,8 @@ FROM node:22-bookworm
 
 RUN apt-get update && apt-get install -y socat && rm -rf /var/lib/apt/lists/*
 
-# 示例二进制文件 1：Gmail CLI
-RUN curl -L https://github.com/steipete/gog/releases/latest/download/gog_Linux_x86_64.tar.gz \
-  | tar -xz -C /usr/local/bin && chmod +x /usr/local/bin/gog
+# 示例二进制文件 1：Google Workspace CLI
+RUN npm install -g @googleworkspace/cli
 
 # 示例二进制文件 2：Google Places CLI
 RUN curl -L https://github.com/steipete/goplaces/releases/latest/download/goplaces_Linux_x86_64.tar.gz \
@@ -277,7 +276,7 @@ docker compose up -d openclaw-gateway
 验证二进制文件：
 
 ```bash
-docker compose exec openclaw-gateway which gog
+docker compose exec openclaw-gateway which gws
 docker compose exec openclaw-gateway which goplaces
 docker compose exec openclaw-gateway which wacli
 ```
@@ -285,7 +284,7 @@ docker compose exec openclaw-gateway which wacli
 预期输出：
 
 ```
-/usr/local/bin/gog
+/home/node/.npm-global/bin/gws
 /usr/local/bin/goplaces
 /usr/local/bin/wacli
 ```

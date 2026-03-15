@@ -230,13 +230,13 @@ htop
 
 大多数 OpenClaw 功能在 ARM64 上可用，但某些外部二进制文件可能需要 ARM 构建：
 
-| 工具               | ARM64 状态 | 说明                                |
-| ------------------ | ---------- | ----------------------------------- |
-| Node.js            | ✅         | 运行良好                            |
-| WhatsApp (Baileys) | ✅         | 纯 JS，无问题                       |
-| Telegram           | ✅         | 纯 JS，无问题                       |
-| gog (Gmail CLI)    | ⚠️         | 检查是否有 ARM 版本                 |
-| Chromium (browser) | ✅         | `sudo apt install chromium-browser` |
+| 工具                       | ARM64 状态 | 说明                                  |
+| -------------------------- | ---------- | ------------------------------------- |
+| Node.js                    | ✅         | 运行良好                              |
+| WhatsApp (Baileys)         | ✅         | 纯 JS，无问题                         |
+| Telegram                   | ✅         | 纯 JS，无问题                         |
+| gws (Google Workspace CLI) | ✅         | npm 包；Node 22+ 可运行的地方即可使用 |
+| Chromium (browser)         | ✅         | `sudo apt install chromium-browser`   |
 
 如果某个 skill 失败，检查其二进制文件是否有 ARM 构建。许多 Go/Rust 工具有；有些没有。
 

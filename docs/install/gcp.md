@@ -224,8 +224,8 @@ OPENCLAW_GATEWAY_PORT=18789
 OPENCLAW_CONFIG_DIR=/home/$USER/.openclaw
 OPENCLAW_WORKSPACE_DIR=/home/$USER/.openclaw/workspace
 
-GOG_KEYRING_PASSWORD=change-me-now
-XDG_CONFIG_HOME=/home/node/.openclaw
+GOOGLE_WORKSPACE_CLI_CONFIG_DIR=/home/node/.openclaw/gws
+GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND=file
 ```
 
 Generate strong secrets:
@@ -257,8 +257,8 @@ services:
       - OPENCLAW_GATEWAY_BIND=${OPENCLAW_GATEWAY_BIND}
       - OPENCLAW_GATEWAY_PORT=${OPENCLAW_GATEWAY_PORT}
       - OPENCLAW_GATEWAY_TOKEN=${OPENCLAW_GATEWAY_TOKEN}
-      - GOG_KEYRING_PASSWORD=${GOG_KEYRING_PASSWORD}
-      - XDG_CONFIG_HOME=${XDG_CONFIG_HOME}
+      - GOOGLE_WORKSPACE_CLI_CONFIG_DIR=${GOOGLE_WORKSPACE_CLI_CONFIG_DIR}
+      - GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND=${GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND}
       - PATH=/home/linuxbrew/.linuxbrew/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
     volumes:
       - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
@@ -281,20 +281,76 @@ services:
 
 ---
 
-## 10) Shared Docker VM runtime steps
+## 10) Bake required binaries into the image (critical)
 
-Use the shared runtime guide for the common Docker host flow:
+Installing binaries inside a running container is a trap.
+Anything installed at runtime will be lost on restart.
 
-- [Bake required binaries into the image](/install/docker-vm-runtime#bake-required-binaries-into-the-image)
-- [Build and launch](/install/docker-vm-runtime#build-and-launch)
-- [What persists where](/install/docker-vm-runtime#what-persists-where)
-- [Updates](/install/docker-vm-runtime#updates)
+All external binaries required by skills must be installed at image build time.
+
+The examples below show three common binaries only:
+
+- `gws` for Google Workspace access
+- `goplaces` for Google Places
+- `wacli` for WhatsApp
+
+These are examples, not a complete list.
+You may install as many binaries as needed using the same pattern.
+
+If you add new skills later that depend on additional binaries, you must:
+
+1. Update the Dockerfile
+2. Rebuild the image
+3. Restart the containers
+
+**Example Dockerfile**
+
+```dockerfile
+FROM node:22-bookworm
+
+RUN apt-get update && apt-get install -y socat && rm -rf /var/lib/apt/lists/*
+
+# Example binary 1: Google Workspace CLI
+RUN npm install -g @googleworkspace/cli
+
+# Example binary 2: Google Places CLI
+RUN curl -L https://github.com/steipete/goplaces/releases/latest/download/goplaces_Linux_x86_64.tar.gz \
+  | tar -xz -C /usr/local/bin && chmod +x /usr/local/bin/goplaces
+
+# Example binary 3: WhatsApp CLI
+RUN curl -L https://github.com/steipete/wacli/releases/latest/download/wacli_Linux_x86_64.tar.gz \
+  | tar -xz -C /usr/local/bin && chmod +x /usr/local/bin/wacli
+
+# Add more binaries below using the same pattern
+
+WORKDIR /app
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
+COPY ui/package.json ./ui/package.json
+COPY scripts ./scripts
+
+RUN corepack enable
+RUN pnpm install --frozen-lockfile
+
+COPY . .
+RUN pnpm build
+RUN pnpm ui:install
+RUN pnpm ui:build
+
+ENV NODE_ENV=production
+
+CMD ["node","dist/index.js"]
+```
 
 ---
 
-## 11) GCP-specific launch notes
+## 11) Build and launch
 
-On GCP, if build fails with `Killed` or `exit code 137` during `pnpm install --frozen-lockfile`, the VM is out of memory. Use `e2-small` minimum, or `e2-medium` for more reliable first builds.
+```bash
+docker compose build
+docker compose up -d openclaw-gateway
+```
+
+If build fails with `Killed` / `exit code 137` during `pnpm install --frozen-lockfile`, the VM is out of memory. Use `e2-small` minimum, or `e2-medium` for more reliable first builds.
 
 When binding to LAN (`OPENCLAW_GATEWAY_BIND=lan`), configure a trusted browser origin before continuing:
 
@@ -304,7 +360,39 @@ docker compose run --rm openclaw-cli config set gateway.controlUi.allowedOrigins
 
 If you changed the gateway port, replace `18789` with your configured port.
 
-## 12) Access from your laptop
+Verify binaries:
+
+```bash
+docker compose exec openclaw-gateway which gws
+docker compose exec openclaw-gateway which goplaces
+docker compose exec openclaw-gateway which wacli
+```
+
+Expected output:
+
+```
+/usr/local/bin/gws
+/usr/local/bin/goplaces
+/usr/local/bin/wacli
+```
+
+---
+
+## 12) Verify Gateway
+
+```bash
+docker compose logs -f openclaw-gateway
+```
+
+Success:
+
+```
+[gateway] listening on ws://0.0.0.0:18789
+```
+
+---
+
+## 13) Access from your laptop
 
 Create an SSH tunnel to forward the Gateway port:
 
@@ -331,8 +419,38 @@ docker compose run --rm openclaw-cli devices list
 docker compose run --rm openclaw-cli devices approve <requestId>
 ```
 
-Need the shared persistence and update reference again?
-See [Docker VM Runtime](/install/docker-vm-runtime#what-persists-where) and [Docker VM Runtime updates](/install/docker-vm-runtime#updates).
+---
+
+## What persists where (source of truth)
+
+OpenClaw runs in Docker, but Docker is not the source of truth.
+All long-lived state must survive restarts, rebuilds, and reboots.
+
+| Component                 | Location                          | Persistence mechanism | Notes                                           |
+| ------------------------- | --------------------------------- | --------------------- | ----------------------------------------------- |
+| Gateway config            | `/home/node/.openclaw/`           | Host volume mount     | Includes `openclaw.json`, tokens                |
+| Model auth profiles       | `/home/node/.openclaw/`           | Host volume mount     | OAuth tokens, API keys                          |
+| Skill configs             | `/home/node/.openclaw/skills/`    | Host volume mount     | Skill-level state                               |
+| Agent workspace           | `/home/node/.openclaw/workspace/` | Host volume mount     | Code and agent artifacts                        |
+| WhatsApp session          | `/home/node/.openclaw/`           | Host volume mount     | Preserves QR login                              |
+| Google Workspace CLI auth | `/home/node/.openclaw/gws/`       | Host volume mount     | Set `GOOGLE_WORKSPACE_CLI_KEYRING_BACKEND=file` |
+| External binaries         | `/usr/local/bin/`                 | Docker image          | Must be baked at build time                     |
+| Node runtime              | Container filesystem              | Docker image          | Rebuilt every image build                       |
+| OS packages               | Container filesystem              | Docker image          | Do not install at runtime                       |
+| Docker container          | Ephemeral                         | Restartable           | Safe to destroy                                 |
+
+---
+
+## Updates
+
+To update OpenClaw on the VM:
+
+```bash
+cd ~/openclaw
+git pull
+docker compose build
+docker compose up -d
+```
 
 ---
 

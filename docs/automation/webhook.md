@@ -153,8 +153,9 @@ Mapping options (summary):
 - `hooks.allowedSessionKeyPrefixes` optionally restricts explicit `sessionKey` values from request payloads and mappings.
 - `allowUnsafeExternalContent: true` disables the external content safety wrapper for that hook
   (dangerous; only for trusted internal sources).
-- `openclaw webhooks gmail setup` writes `hooks.gmail` config for `openclaw webhooks gmail run`.
-  See [Gmail Pub/Sub](/automation/gmail-pubsub) for the full Gmail watch flow.
+- Gmail-specific `/hooks/gmail` ingestion is still supported, but OpenClaw no longer
+  manages the old Pub/Sub watcher flow. See [Gmail Pub/Sub](/automation/gmail-pubsub)
+  for migration notes.
 
 ## Responses
 

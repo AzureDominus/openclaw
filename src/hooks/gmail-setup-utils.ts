@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { hasBinary } from "../agents/skills.js";
 import { runCommandWithTimeout, type SpawnResult } from "../process/exec.js";
-import { resolveUserPath } from "../utils.js";
 import { normalizeServePath } from "./gmail.js";
 
 let cachedPythonPath: string | null | undefined;
@@ -313,71 +312,4 @@ export async function ensureTailscaleEndpoint(params: {
   const baseUrl = `https://${dnsName}${pathArg}`;
   // Funnel/serve strips pathArg before proxying; keep it only in the public URL.
   return params.token ? `${baseUrl}?token=${params.token}` : baseUrl;
-}
-
-export async function resolveProjectIdFromGogCredentials(): Promise<string | null> {
-  const candidates = gogCredentialsPaths();
-  for (const candidate of candidates) {
-    if (!fs.existsSync(candidate)) {
-      continue;
-    }
-    try {
-      const raw = fs.readFileSync(candidate, "utf-8");
-      const parsed = JSON.parse(raw) as Record<string, unknown>;
-      const clientId = extractGogClientId(parsed);
-      const projectNumber = extractProjectNumber(clientId);
-      if (!projectNumber) {
-        continue;
-      }
-      const res = await runGcloudCommand(
-        [
-          "projects",
-          "list",
-          "--filter",
-          `projectNumber=${projectNumber}`,
-          "--format",
-          "value(projectId)",
-        ],
-        30_000,
-      );
-      if (res.code !== 0) {
-        continue;
-      }
-      const projectId = res.stdout.trim().split(/\s+/)[0];
-      if (projectId) {
-        return projectId;
-      }
-    } catch {
-      // keep scanning
-    }
-  }
-  return null;
-}
-
-function gogCredentialsPaths(): string[] {
-  const paths: string[] = [];
-  const xdg = process.env.XDG_CONFIG_HOME;
-  if (xdg) {
-    paths.push(path.join(xdg, "gogcli", "credentials.json"));
-  }
-  paths.push(resolveUserPath("~/.config/gogcli/credentials.json"));
-  if (process.platform === "darwin") {
-    paths.push(resolveUserPath("~/Library/Application Support/gogcli/credentials.json"));
-  }
-  return paths;
-}
-
-function extractGogClientId(parsed: Record<string, unknown>): string | null {
-  const installed = parsed.installed as Record<string, unknown> | undefined;
-  const web = parsed.web as Record<string, unknown> | undefined;
-  const candidate = installed?.client_id || web?.client_id || parsed.client_id || "";
-  return typeof candidate === "string" ? candidate : null;
-}
-
-function extractProjectNumber(clientId: string | null): string | null {
-  if (!clientId) {
-    return null;
-  }
-  const match = clientId.match(/^(\d+)-/);
-  return match?.[1] ?? null;
 }

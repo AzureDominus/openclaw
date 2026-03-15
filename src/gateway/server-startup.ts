@@ -12,7 +12,6 @@ import { cleanStaleLockFiles } from "../agents/session-write-lock.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { loadConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
-import { startGmailWatcherWithLogs } from "../hooks/gmail-watcher-lifecycle.js";
 import {
   clearInternalHooks,
   createInternalHookEvent,
@@ -68,12 +67,6 @@ export async function startGatewaySidecars(params: {
   } catch (err) {
     params.logBrowser.error(`server failed to start: ${String(err)}`);
   }
-
-  // Start Gmail watcher if configured (hooks.gmail.account).
-  await startGmailWatcherWithLogs({
-    cfg: params.cfg,
-    log: params.logHooks,
-  });
 
   // Validate hooks.gmail.model if configured.
   if (params.cfg.hooks?.gmail?.model) {

@@ -379,17 +379,10 @@ x-i18n:
       },
     ],
     gmail: {
-      account: "openclaw@gmail.com",
-      label: "INBOX",
-      topic: "projects/<project-id>/topics/gog-gmail-watch",
-      subscription: "gog-gmail-watch-push",
-      pushToken: "shared-push-token",
-      hookUrl: "http://127.0.0.1:18789/hooks/gmail",
-      includeBody: true,
-      maxBytes: 20000,
-      renewEveryMinutes: 720,
-      serve: { bind: "127.0.0.1", port: 8788, path: "/" },
-      tailscale: { mode: "funnel", path: "/gmail-pubsub" },
+      // /hooks/gmail 仍可与外部接入器一起使用。
+      // 旧版 Pub/Sub watcher 字段此处省略，因为 Gateway 已不再管理它们。
+      model: "openai/gpt-5.2-mini",
+      thinking: "off",
     },
   },
 

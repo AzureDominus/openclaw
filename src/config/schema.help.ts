@@ -1286,43 +1286,43 @@ export const FIELD_HELP: Record<string, string> = {
   "hooks.mappings[].transform.export":
     "Named export to invoke from the transform module; defaults to module default export when omitted. Set this when one file hosts multiple transform handlers.",
   "hooks.gmail":
-    "Gmail push integration settings used for Pub/Sub notifications and optional local callback serving. Keep this scoped to dedicated Gmail automation accounts where possible.",
+    "Gmail webhook settings. `/hooks/gmail` remains supported for external ingestors, while legacy Pub/Sub watcher fields are kept only for compatibility.",
   "hooks.gmail.account":
-    "Google account identifier used for Gmail watch/subscription operations in this hook integration. Use a dedicated automation mailbox account to isolate operational permissions.",
+    "Legacy Gmail watcher account field retained for compatibility. Current gateway builds ignore it and expect an external ingestor to own watch state.",
   "hooks.gmail.label":
-    "Optional Gmail label filter limiting which labeled messages trigger hook events. Keep filters narrow to avoid flooding automations with unrelated inbox traffic.",
+    "Legacy Gmail watcher label filter retained for compatibility. Current gateway builds ignore it.",
   "hooks.gmail.topic":
-    "Google Pub/Sub topic name used by Gmail watch to publish change notifications for this account. Ensure the topic IAM grants Gmail publish access before enabling watches.",
+    "Legacy Gmail Pub/Sub topic field retained for compatibility. Current gateway builds ignore it.",
   "hooks.gmail.subscription":
-    "Pub/Sub subscription consumed by the gateway to receive Gmail change notifications from the configured topic. Keep subscription ownership clear so multiple consumers do not race unexpectedly.",
+    "Legacy Gmail Pub/Sub subscription field retained for compatibility. Current gateway builds ignore it.",
   "hooks.gmail.hookUrl":
-    "Public callback URL Gmail or intermediaries invoke to deliver notifications into this hook pipeline. Keep this URL protected with token validation and restricted network exposure.",
+    "Legacy watcher callback URL field retained for compatibility. Current gateway builds ignore it.",
   "hooks.gmail.includeBody":
-    "When true, fetch and include email body content for downstream mapping/agent processing. Keep false unless body text is required, because this increases payload size and sensitivity.",
+    "Legacy watcher payload expansion field retained for compatibility. Current gateway builds ignore it.",
   "hooks.gmail.allowUnsafeExternalContent":
     "Allows less-sanitized external Gmail content to pass into processing when enabled. Keep disabled for safer defaults, and enable only for trusted mail streams with controlled transforms.",
   "hooks.gmail.serve":
-    "Local callback server settings block for directly receiving Gmail notifications without a separate ingress layer. Enable only when this process should terminate webhook traffic itself.",
+    "Legacy local watcher server settings retained for compatibility. Current gateway builds ignore them.",
   "hooks.gmail.pushToken":
-    "Shared secret token required on Gmail push hook callbacks before processing notifications. Use env substitution and rotate if callback endpoints are exposed externally.",
+    "Legacy Gmail watcher push token retained for compatibility. Current gateway builds ignore it.",
   "hooks.gmail.maxBytes":
-    "Maximum Gmail payload bytes processed per event when includeBody is enabled. Keep conservative limits to reduce oversized message processing cost and risk.",
+    "Legacy watcher body-size limit retained for compatibility. Current gateway builds ignore it.",
   "hooks.gmail.renewEveryMinutes":
-    "Renewal cadence in minutes for Gmail watch subscriptions to prevent expiration. Set below provider expiration windows and monitor renew failures in logs.",
+    "Legacy watcher renewal cadence retained for compatibility. Current gateway builds ignore it.",
   "hooks.gmail.serve.bind":
-    "Bind address for the local Gmail callback HTTP server used when serving hooks directly. Keep loopback-only unless external ingress is intentionally required.",
+    "Legacy watcher bind address retained for compatibility. Current gateway builds ignore it.",
   "hooks.gmail.serve.port":
-    "Port for the local Gmail callback HTTP server when serve mode is enabled. Use a dedicated port to avoid collisions with gateway/control interfaces.",
+    "Legacy watcher port retained for compatibility. Current gateway builds ignore it.",
   "hooks.gmail.serve.path":
-    "HTTP path on the local Gmail callback server where push notifications are accepted. Keep this consistent with subscription configuration to avoid dropped events.",
+    "Legacy watcher path retained for compatibility. Current gateway builds ignore it.",
   "hooks.gmail.tailscale.mode":
-    'Tailscale exposure mode for Gmail callbacks: "off", "serve", or "funnel". Use "serve" for private tailnet delivery and "funnel" only when public internet ingress is required.',
+    "Legacy watcher Tailscale mode retained for compatibility. Current gateway builds ignore it.",
   "hooks.gmail.tailscale":
-    "Tailscale exposure configuration block for publishing Gmail callbacks through Serve/Funnel routes. Use private tailnet modes before enabling any public ingress path.",
+    "Legacy watcher Tailscale settings retained for compatibility. Current gateway builds ignore them.",
   "hooks.gmail.tailscale.path":
-    "Path published by Tailscale Serve/Funnel for Gmail callback forwarding when enabled. Keep it aligned with Gmail webhook config so requests reach the expected handler.",
+    "Legacy watcher Tailscale path retained for compatibility. Current gateway builds ignore it.",
   "hooks.gmail.tailscale.target":
-    "Local service target forwarded by Tailscale Serve/Funnel (for example http://127.0.0.1:8787). Use explicit loopback targets to avoid ambiguous routing.",
+    "Legacy watcher Tailscale target retained for compatibility. Current gateway builds ignore it.",
   "hooks.gmail.model":
     "Optional model override for Gmail-triggered runs when mailbox automations should use dedicated model behavior. Keep unset to inherit agent defaults unless mailbox tasks need specialization.",
   "hooks.gmail.thinking":

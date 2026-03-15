@@ -116,7 +116,6 @@ describe("gateway --force helpers", () => {
       if (call === 2 || call === 3) {
         return renderListeners(command, [{ pid: 42, command: "node" }]);
       }
-      }
       return "";
     });
 
@@ -171,8 +170,13 @@ describe("gateway --force helpers", () => {
     vi.useRealTimers();
   });
 
-  it("falls back to fuser when lsof is permission denied", async () => {
+  it("falls back to fuser when ss/lsof inspection is unavailable", async () => {
     (execFileSync as unknown as Mock).mockImplementation((cmd: string) => {
+      if (cmd === "ss") {
+        const err = new Error("spawnSync ss ENOENT") as NodeJS.ErrnoException;
+        err.code = "ENOENT";
+        throw err;
+      }
       if (cmd.includes("lsof")) {
         const err = new Error("spawnSync lsof EACCES") as NodeJS.ErrnoException;
         err.code = "EACCES";
@@ -193,9 +197,14 @@ describe("gateway --force helpers", () => {
     );
   });
 
-  it("uses fuser SIGKILL escalation when port stays busy", async () => {
+  it("uses fuser SIGKILL escalation when ss/lsof inspection is unavailable and port stays busy", async () => {
     vi.useFakeTimers();
     (execFileSync as unknown as Mock).mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === "ss") {
+        const err = new Error("spawnSync ss ENOENT") as NodeJS.ErrnoException;
+        err.code = "ENOENT";
+        throw err;
+      }
       if (cmd.includes("lsof")) {
         const err = new Error("spawnSync lsof EACCES") as NodeJS.ErrnoException;
         err.code = "EACCES";
