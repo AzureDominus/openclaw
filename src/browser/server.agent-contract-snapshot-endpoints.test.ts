@@ -75,13 +75,14 @@ describe("browser control server", () => {
       }),
     );
 
-    const click = await postJson<{ ok: boolean }>(`${base}/act`, {
+    const click = await postJson<{ ok: boolean; url?: string }>(`${base}/act`, {
       kind: "click",
       ref: "1",
       button: "left",
       modifiers: ["Shift"],
     });
     expect(click.ok).toBe(true);
+    expect(click.url).toBe("https://example.com/after-click");
     expect(pwMocks.clickViaPlaywright).toHaveBeenNthCalledWith(1, {
       cdpUrl: state.cdpBaseUrl,
       targetId: "abcd1234",
@@ -89,6 +90,11 @@ describe("browser control server", () => {
       doubleClick: false,
       button: "left",
       modifiers: ["Shift"],
+    });
+    expect(pwMocks.readPageUrlViaPlaywright).toHaveBeenNthCalledWith(1, {
+      cdpUrl: state.cdpBaseUrl,
+      targetId: "abcd1234",
+      timeoutMs: undefined,
     });
 
     const clickSelector = await realFetch(`${base}/act`, {

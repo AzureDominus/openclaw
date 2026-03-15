@@ -119,6 +119,19 @@ export async function clickViaPlaywright(opts: {
   }
 }
 
+export async function readPageUrlViaPlaywright(opts: {
+  cdpUrl: string;
+  targetId?: string;
+  timeoutMs?: number;
+}): Promise<{ url: string }> {
+  const page = await getPageForTargetId(opts);
+  ensurePageState(page);
+  const timeout = Math.max(250, Math.min(2_000, opts.timeoutMs ?? 750));
+  await page.waitForLoadState("domcontentloaded", { timeout }).catch(() => {});
+  await page.waitForTimeout(0).catch(() => {});
+  return { url: page.url() };
+}
+
 export async function hoverViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;

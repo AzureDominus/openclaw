@@ -50,6 +50,32 @@ const browserActionsMocks = vi.hoisted(() => ({
 }));
 vi.mock("../../browser/client-actions.js", () => browserActionsMocks);
 
+const browserObserveMocks = vi.hoisted(() => ({
+  browserPageErrors: vi.fn(async () => ({ ok: true, targetId: "t1", errors: [] })),
+  browserRequests: vi.fn(async () => ({ ok: true, targetId: "t1", requests: [] })),
+  browserTraceStart: vi.fn(async () => ({ ok: true, targetId: "t1" })),
+  browserTraceStop: vi.fn(async () => ({ ok: true, path: "/tmp/trace.zip" })),
+}));
+vi.mock("../../browser/client-actions-observe.js", () => browserObserveMocks);
+
+const browserStateMocks = vi.hoisted(() => ({
+  browserCookies: vi.fn(async () => ({ ok: true, targetId: "t1", cookies: [] })),
+  browserCookiesSet: vi.fn(async () => ({ ok: true, targetId: "t1" })),
+  browserCookiesClear: vi.fn(async () => ({ ok: true, targetId: "t1" })),
+  browserStorageGet: vi.fn(async () => ({ ok: true, targetId: "t1", values: {} })),
+  browserStorageSet: vi.fn(async () => ({ ok: true, targetId: "t1" })),
+  browserStorageClear: vi.fn(async () => ({ ok: true, targetId: "t1" })),
+  browserSetOffline: vi.fn(async () => ({ ok: true, targetId: "t1" })),
+  browserSetHeaders: vi.fn(async () => ({ ok: true, targetId: "t1" })),
+  browserSetHttpCredentials: vi.fn(async () => ({ ok: true, targetId: "t1" })),
+  browserSetGeolocation: vi.fn(async () => ({ ok: true, targetId: "t1" })),
+  browserSetMedia: vi.fn(async () => ({ ok: true, targetId: "t1" })),
+  browserSetTimezone: vi.fn(async () => ({ ok: true, targetId: "t1" })),
+  browserSetLocale: vi.fn(async () => ({ ok: true, targetId: "t1" })),
+  browserSetDevice: vi.fn(async () => ({ ok: true, targetId: "t1" })),
+}));
+vi.mock("../../browser/client-actions-state.js", () => browserStateMocks);
+
 const browserConfigMocks = vi.hoisted(() => ({
   resolveBrowserConfig: vi.fn(() => ({
     enabled: true,
@@ -139,6 +165,7 @@ vi.mock("./common.js", async () => {
 
 import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "../../browser/constants.js";
 import { createBrowserTool } from "./browser-tool.js";
+import { __resetBrowserSessionStateForTests } from "./browser-tool.session-state.js";
 
 function mockSingleBrowserProxyNode() {
   nodesUtilsMocks.listNodes.mockResolvedValue([
@@ -162,6 +189,7 @@ function resetBrowserToolMocks() {
     defaultProfile: "openclaw",
   });
   nodesUtilsMocks.listNodes.mockResolvedValue([]);
+  __resetBrowserSessionStateForTests();
 }
 
 function setResolvedBrowserProfiles(
@@ -796,5 +824,134 @@ describe("browser tool act stale target recovery", () => {
     ).rejects.toThrow(/Run action=tabs profile="chrome-relay"/i);
 
     expect(browserActionsMocks.browserAct).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("browser tool attached sessions", () => {
+  registerBrowserToolAfterEachReset();
+
+  it("attaches to a tab and reuses the attached target across later actions", async () => {
+    browserClientMocks.browserTabs.mockResolvedValue([
+      { targetId: "tab-1", type: "page", title: "One", url: "https://example.com/1" },
+      { targetId: "tab-2", type: "page", title: "Two", url: "https://example.com/2" },
+    ]);
+    browserClientMocks.browserStatus.mockResolvedValue({
+      ok: true,
+      running: true,
+      pid: 1,
+      profile: "openclaw",
+      cdpPort: 18792,
+      cdpUrl: "http://127.0.0.1:18792",
+      cdpReady: true,
+    });
+
+    const tool = createBrowserTool({ sessionId: "session-1" });
+    const attached = await tool.execute?.("call-1", { action: "session_attach" });
+    expect(attached?.details).toMatchObject({
+      attached: true,
+      targetId: "tab-1",
+      profile: "openclaw",
+      cdpUrl: "http://127.0.0.1:18792",
+    });
+
+    await tool.execute?.("call-2", { action: "focus", targetId: "tab-2" });
+    expect(browserClientMocks.browserFocusTab).toHaveBeenCalledWith(
+      undefined,
+      "tab-2",
+      expect.objectContaining({ profile: "openclaw" }),
+    );
+
+    await tool.execute?.("call-3", { action: "console" });
+    expect(browserActionsMocks.browserConsoleMessages).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ targetId: "tab-2", profile: "openclaw" }),
+    );
+
+    const status = await tool.execute?.("call-4", { action: "session_status" });
+    expect(status?.details).toMatchObject({
+      attached: true,
+      targetId: "tab-2",
+      title: "Two",
+      url: "https://example.com/2",
+    });
+
+    const cleared = await tool.execute?.("call-5", { action: "session_clear" });
+    expect(cleared?.details).toMatchObject({ ok: true, cleared: true });
+  });
+
+  it("fails fast when session_attach is requested for chrome without an attached relay tab", async () => {
+    browserClientMocks.browserTabs.mockResolvedValue([]);
+    browserClientMocks.browserStatus.mockResolvedValue({
+      ok: true,
+      running: true,
+      pid: 1,
+      profile: "chrome",
+      cdpPort: 18792,
+      cdpUrl: "http://127.0.0.1:18792",
+      cdpReady: true,
+    });
+
+    const tool = createBrowserTool({ sessionId: "session-1" });
+    await expect(
+      tool.execute?.("call-1", { action: "session_attach", profile: "chrome" }),
+    ).rejects.toThrow(/No Chrome tabs are attached/i);
+  });
+});
+
+describe("browser tool inspect and state actions", () => {
+  registerBrowserToolAfterEachReset();
+
+  it("inspect ignores efficient-mode config defaults and requests a full ai snapshot with aria refs", async () => {
+    configMocks.loadConfig.mockReturnValue({
+      browser: { snapshotDefaults: { mode: "efficient" } },
+    });
+    toolCommonMocks.imageResultFromFile.mockResolvedValueOnce({
+      content: [{ type: "text", text: "inspect" }],
+      details: { ok: true },
+    });
+
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", { action: "inspect" });
+
+    expect(browserClientMocks.browserSnapshot).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({
+        format: "ai",
+        refs: "aria",
+        maxChars: DEFAULT_AI_SNAPSHOT_MAX_CHARS,
+      }),
+    );
+    const snapshotOpts = browserClientMocks.browserSnapshot.mock.calls.at(-1)?.[1] as
+      | { mode?: string }
+      | undefined;
+    expect(snapshotOpts?.mode).toBeUndefined();
+    expect(browserActionsMocks.browserScreenshotAction).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({
+        targetId: "t1",
+        type: "jpeg",
+      }),
+    );
+  });
+
+  it("passes the renamed storage key field through to storage_set", async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "storage_set",
+      storageKind: "local",
+      key: "theme",
+      value: "dark",
+      targetId: "tab-1",
+    });
+
+    expect(browserStateMocks.browserStorageSet).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({
+        kind: "local",
+        key: "theme",
+        value: "dark",
+        targetId: "tab-1",
+      }),
+    );
   });
 });

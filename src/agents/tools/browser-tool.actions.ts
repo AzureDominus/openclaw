@@ -1,7 +1,12 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import { browserAct, browserConsoleMessages } from "../../browser/client-actions.js";
-import { browserSnapshot, browserTabs } from "../../browser/client.js";
+import {
+  browserAct,
+  browserConsoleMessages,
+  browserScreenshotAction,
+} from "../../browser/client-actions.js";
+import { browserSnapshot, browserTabs, type BrowserTab } from "../../browser/client.js";
 import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "../../browser/constants.js";
+import { resolveTargetIdFromTabs } from "../../browser/target-id.js";
 import { loadConfig } from "../../config/config.js";
 import { wrapExternalContent } from "../../security/external-content.js";
 import { imageResultFromFile, jsonResult } from "./common.js";
@@ -14,6 +19,21 @@ type BrowserProxyRequest = (opts: {
   timeoutMs?: number;
   profile?: string;
 }) => Promise<unknown>;
+
+type SnapshotQuery = {
+  format?: "ai" | "aria";
+  targetId?: string;
+  limit?: number;
+  maxChars?: number;
+  refs?: "aria" | "role";
+  interactive?: boolean;
+  compact?: boolean;
+  depth?: number;
+  selector?: string;
+  frame?: string;
+  labels?: boolean;
+  mode?: "efficient";
+};
 
 function wrapBrowserExternalJson(params: {
   kind: "snapshot" | "console" | "tabs";
@@ -73,6 +93,141 @@ function formatConsoleToolResult(result: {
   };
 }
 
+async function readTabs(params: {
+  baseUrl?: string;
+  profile?: string;
+  proxyRequest: BrowserProxyRequest | null;
+}): Promise<BrowserTab[]> {
+  const { baseUrl, profile, proxyRequest } = params;
+  if (proxyRequest) {
+    const result = await proxyRequest({
+      method: "GET",
+      path: "/tabs",
+      profile,
+    });
+    const tabs = (result as { tabs?: BrowserTab[] }).tabs;
+    return Array.isArray(tabs) ? tabs : [];
+  }
+  return await browserTabs(baseUrl, { profile });
+}
+
+function pickDefaultTab(tabs: BrowserTab[]): BrowserTab | undefined {
+  const page = tabs.find((tab) => (tab.type ?? "page") === "page");
+  return page ?? tabs.at(0);
+}
+
+export function resolveTabForTarget(params: {
+  tabs: BrowserTab[];
+  targetId?: string;
+}): BrowserTab | undefined {
+  const { tabs, targetId } = params;
+  const requested = targetId?.trim();
+  if (!requested) {
+    return pickDefaultTab(tabs);
+  }
+  const resolved = resolveTargetIdFromTabs(requested, tabs);
+  if (!resolved.ok) {
+    throw new Error(
+      resolved.reason === "ambiguous"
+        ? `targetId is ambiguous: ${requested}`
+        : `targetId not found: ${requested}`,
+    );
+  }
+  return tabs.find((tab) => tab.targetId === resolved.targetId);
+}
+
+function buildSnapshotQuery(params: {
+  input: Record<string, unknown>;
+  useConfigEfficientDefault: boolean;
+  defaultFormat?: "ai" | "aria";
+  defaultRefs?: "aria" | "role";
+}): SnapshotQuery {
+  const snapshotDefaults = params.useConfigEfficientDefault
+    ? loadConfig().browser?.snapshotDefaults
+    : undefined;
+  const format: "ai" | "aria" | undefined =
+    params.input.snapshotFormat === "ai" || params.input.snapshotFormat === "aria"
+      ? params.input.snapshotFormat
+      : params.defaultFormat;
+  const mode: "efficient" | undefined =
+    params.input.mode === "efficient"
+      ? "efficient"
+      : format !== "aria" && snapshotDefaults?.mode === "efficient"
+        ? "efficient"
+        : undefined;
+  const labels = typeof params.input.labels === "boolean" ? params.input.labels : undefined;
+  const refs: "aria" | "role" | undefined =
+    params.input.refs === "aria" || params.input.refs === "role"
+      ? params.input.refs
+      : params.defaultRefs;
+  const hasMaxChars = Object.hasOwn(params.input, "maxChars");
+  const targetId =
+    typeof params.input.targetId === "string" ? params.input.targetId.trim() : undefined;
+  const limit =
+    typeof params.input.limit === "number" && Number.isFinite(params.input.limit)
+      ? params.input.limit
+      : undefined;
+  const maxChars =
+    typeof params.input.maxChars === "number" &&
+    Number.isFinite(params.input.maxChars) &&
+    params.input.maxChars > 0
+      ? Math.floor(params.input.maxChars)
+      : undefined;
+  const interactive =
+    typeof params.input.interactive === "boolean" ? params.input.interactive : undefined;
+  const compact = typeof params.input.compact === "boolean" ? params.input.compact : undefined;
+  const depth =
+    typeof params.input.depth === "number" && Number.isFinite(params.input.depth)
+      ? params.input.depth
+      : undefined;
+  const selector =
+    typeof params.input.selector === "string" ? params.input.selector.trim() : undefined;
+  const frame = typeof params.input.frame === "string" ? params.input.frame.trim() : undefined;
+  const resolvedMaxChars =
+    format === "ai"
+      ? hasMaxChars
+        ? maxChars
+        : mode === "efficient"
+          ? undefined
+          : DEFAULT_AI_SNAPSHOT_MAX_CHARS
+      : hasMaxChars
+        ? maxChars
+        : undefined;
+  return {
+    ...(format ? { format } : {}),
+    targetId,
+    limit,
+    ...(typeof resolvedMaxChars === "number" ? { maxChars: resolvedMaxChars } : {}),
+    refs,
+    interactive,
+    compact,
+    depth,
+    selector,
+    frame,
+    labels,
+    mode,
+  };
+}
+
+async function fetchSnapshot(params: {
+  snapshotQuery: SnapshotQuery;
+  baseUrl?: string;
+  profile?: string;
+  proxyRequest: BrowserProxyRequest | null;
+}) {
+  const { snapshotQuery, baseUrl, profile, proxyRequest } = params;
+  return proxyRequest
+    ? ((await proxyRequest({
+        method: "GET",
+        path: "/snapshot",
+        profile,
+        query: snapshotQuery,
+      })) as Awaited<ReturnType<typeof browserSnapshot>>)
+    : await browserSnapshot(baseUrl, {
+        ...snapshotQuery,
+        profile,
+      });
+}
 function isChromeStaleTargetError(profile: string | undefined, err: unknown): boolean {
   if (profile !== "chrome-relay" && profile !== "chrome") {
     return false;
@@ -109,17 +264,7 @@ export async function executeTabsAction(params: {
   profile?: string;
   proxyRequest: BrowserProxyRequest | null;
 }): Promise<AgentToolResult<unknown>> {
-  const { baseUrl, profile, proxyRequest } = params;
-  if (proxyRequest) {
-    const result = await proxyRequest({
-      method: "GET",
-      path: "/tabs",
-      profile,
-    });
-    const tabs = (result as { tabs?: unknown[] }).tabs ?? [];
-    return formatTabsToolResult(tabs);
-  }
-  const tabs = await browserTabs(baseUrl, { profile });
+  const tabs = await readTabs(params);
   return formatTabsToolResult(tabs);
 }
 
@@ -130,69 +275,16 @@ export async function executeSnapshotAction(params: {
   proxyRequest: BrowserProxyRequest | null;
 }): Promise<AgentToolResult<unknown>> {
   const { input, baseUrl, profile, proxyRequest } = params;
-  const snapshotDefaults = loadConfig().browser?.snapshotDefaults;
-  const format: "ai" | "aria" | undefined =
-    input.snapshotFormat === "ai" || input.snapshotFormat === "aria"
-      ? input.snapshotFormat
-      : undefined;
-  const mode: "efficient" | undefined =
-    input.mode === "efficient"
-      ? "efficient"
-      : format !== "aria" && snapshotDefaults?.mode === "efficient"
-        ? "efficient"
-        : undefined;
-  const labels = typeof input.labels === "boolean" ? input.labels : undefined;
-  const refs: "aria" | "role" | undefined =
-    input.refs === "aria" || input.refs === "role" ? input.refs : undefined;
-  const hasMaxChars = Object.hasOwn(input, "maxChars");
-  const targetId = typeof input.targetId === "string" ? input.targetId.trim() : undefined;
-  const limit =
-    typeof input.limit === "number" && Number.isFinite(input.limit) ? input.limit : undefined;
-  const maxChars =
-    typeof input.maxChars === "number" && Number.isFinite(input.maxChars) && input.maxChars > 0
-      ? Math.floor(input.maxChars)
-      : undefined;
-  const interactive = typeof input.interactive === "boolean" ? input.interactive : undefined;
-  const compact = typeof input.compact === "boolean" ? input.compact : undefined;
-  const depth =
-    typeof input.depth === "number" && Number.isFinite(input.depth) ? input.depth : undefined;
-  const selector = typeof input.selector === "string" ? input.selector.trim() : undefined;
-  const frame = typeof input.frame === "string" ? input.frame.trim() : undefined;
-  const resolvedMaxChars =
-    format === "ai"
-      ? hasMaxChars
-        ? maxChars
-        : mode === "efficient"
-          ? undefined
-          : DEFAULT_AI_SNAPSHOT_MAX_CHARS
-      : hasMaxChars
-        ? maxChars
-        : undefined;
-  const snapshotQuery = {
-    ...(format ? { format } : {}),
-    targetId,
-    limit,
-    ...(typeof resolvedMaxChars === "number" ? { maxChars: resolvedMaxChars } : {}),
-    refs,
-    interactive,
-    compact,
-    depth,
-    selector,
-    frame,
-    labels,
-    mode,
-  };
-  const snapshot = proxyRequest
-    ? ((await proxyRequest({
-        method: "GET",
-        path: "/snapshot",
-        profile,
-        query: snapshotQuery,
-      })) as Awaited<ReturnType<typeof browserSnapshot>>)
-    : await browserSnapshot(baseUrl, {
-        ...snapshotQuery,
-        profile,
-      });
+  const wantsLabels = input.labels === true;
+  const snapshot = await fetchSnapshot({
+    snapshotQuery: buildSnapshotQuery({
+      input,
+      useConfigEfficientDefault: true,
+    }),
+    baseUrl,
+    profile,
+    proxyRequest,
+  });
   if (snapshot.format === "ai") {
     const extractedText = snapshot.snapshot ?? "";
     const wrappedSnapshot = wrapExternalContent(extractedText, {
@@ -220,7 +312,7 @@ export async function executeSnapshotAction(params: {
         wrapped: true,
       },
     };
-    if (labels && snapshot.imagePath) {
+    if (wantsLabels && snapshot.imagePath) {
       return await imageResultFromFile({
         label: "browser:snapshot",
         path: snapshot.imagePath,
@@ -256,6 +348,67 @@ export async function executeSnapshotAction(params: {
       },
     };
   }
+}
+
+export async function executeInspectAction(params: {
+  input: Record<string, unknown>;
+  baseUrl?: string;
+  profile?: string;
+  proxyRequest: BrowserProxyRequest | null;
+}): Promise<AgentToolResult<unknown>> {
+  const { input, baseUrl, profile, proxyRequest } = params;
+  const snapshot = await fetchSnapshot({
+    snapshotQuery: buildSnapshotQuery({
+      input,
+      useConfigEfficientDefault: false,
+      defaultFormat: "ai",
+      defaultRefs: "aria",
+    }),
+    baseUrl,
+    profile,
+    proxyRequest,
+  });
+  const screenshot = proxyRequest
+    ? ((await proxyRequest({
+        method: "POST",
+        path: "/screenshot",
+        profile,
+        body: {
+          targetId: snapshot.targetId,
+          fullPage: Boolean(input.fullPage),
+          type: "jpeg",
+        },
+      })) as Awaited<ReturnType<typeof browserScreenshotAction>>)
+    : await browserScreenshotAction(baseUrl, {
+        targetId: snapshot.targetId,
+        fullPage: Boolean(input.fullPage),
+        type: "jpeg",
+        profile,
+      });
+
+  const text =
+    snapshot.format === "ai"
+      ? wrapExternalContent(snapshot.snapshot ?? "", {
+          source: "browser",
+          includeWarning: true,
+        })
+      : wrapBrowserExternalJson({
+          kind: "snapshot",
+          payload: snapshot,
+        }).wrappedText;
+  return await imageResultFromFile({
+    label: "browser:inspect",
+    path: screenshot.path,
+    extraText: text,
+    details: {
+      ok: true,
+      action: "inspect",
+      targetId: snapshot.targetId,
+      url: snapshot.url,
+      snapshot,
+      screenshot,
+    },
+  });
 }
 
 export async function executeConsoleAction(params: {

@@ -297,6 +297,8 @@ describe("createOpenClawCodingTools", () => {
     const tools = createOpenClawTools();
     const coreTools = new Set([
       "browser",
+      "js_repl",
+      "js_repl_reset",
       "canvas",
       "nodes",
       "cron",
@@ -312,6 +314,12 @@ describe("createOpenClawCodingTools", () => {
       "image",
     ]);
     expect(findUnionKeywordOffenders(tools, { onlyNames: coreTools })).toEqual([]);
+  });
+  it("includes js_repl tools in the OpenClaw tool set", () => {
+    const tools = createOpenClawTools();
+    const names = new Set(tools.map((tool) => tool.name));
+    expect(names.has("js_repl")).toBe(true);
+    expect(names.has("js_repl_reset")).toBe(true);
   });
   it("does not expose provider-specific message tools", () => {
     const tools = createOpenClawCodingTools({ messageProvider: "discord" });

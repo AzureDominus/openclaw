@@ -95,6 +95,12 @@ export default defineConfig([
     entry: "src/entry.ts",
   }),
   nodeBuildConfig({
+    // Keep js_repl worker as a concrete dist file so the bundled runtime can spawn it.
+    entry: {
+      "js-repl-worker": "src/agents/tools/js-repl-worker.ts",
+    },
+  }),
+  nodeBuildConfig({
     // Ensure this module is bundled as an entry so legacy CLI shims can resolve its exports.
     entry: "src/cli/daemon-cli.ts",
   }),

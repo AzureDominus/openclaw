@@ -554,7 +554,12 @@ export function registerBrowserAgentActRoutes(
               clickRequest.timeoutMs = timeoutMs;
             }
             await pw.clickViaPlaywright(clickRequest);
-            return res.json({ ok: true, targetId: tab.targetId, url: tab.url });
+            const current = await pw.readPageUrlViaPlaywright({
+              cdpUrl,
+              targetId: tab.targetId,
+              timeoutMs: timeoutMs ?? undefined,
+            });
+            return res.json({ ok: true, targetId: tab.targetId, url: current.url });
           }
           case "type": {
             const ref = toStringOrEmpty(body.ref) || undefined;

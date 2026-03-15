@@ -243,7 +243,11 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("send a brief preamble before each tool batch");
     expect(prompt).toContain("Before long-latency operations");
     expect(prompt).toContain("Prefer scoped extraction over giant dumps");
-    expect(prompt).toContain("For browser snapshots, prefer `mode=efficient`");
+    expect(prompt).toContain("attach once with `browser` action=`session_attach`");
+    expect(prompt).toContain("prefer action=`inspect` for broad page context");
+    expect(prompt).toContain(
+      "Use snapshot `mode=efficient` only when you explicitly want a compact snapshot",
+    );
     expect(prompt).toContain("If a tool result indicates output truncation");
     expect(prompt).toContain("Keep working until the request is fully resolved");
     expect(prompt).toContain("Do not stop after a status update");

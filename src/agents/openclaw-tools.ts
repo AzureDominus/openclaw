@@ -13,6 +13,7 @@ import type { AnyAgentTool } from "./tools/common.js";
 import { createCronTool } from "./tools/cron-tool.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
+import { createJsReplResetTool, createJsReplTool } from "./tools/js-repl-tool.js";
 import { createMessageTool } from "./tools/message-tool.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
 import { createPdfTool } from "./tools/pdf-tool.js";
@@ -136,13 +137,17 @@ export function createOpenClawTools(
         requireExplicitTarget: options?.requireExplicitMessageTarget,
         requesterSenderId: options?.requesterSenderId ?? undefined,
       });
-  const tools: AnyAgentTool[] = [
-    createBrowserTool({
-      sandboxBridgeUrl: options?.sandboxBrowserBridgeUrl,
-      allowHostControl: options?.allowHostBrowserControl,
-      agentSessionKey: options?.agentSessionKey,
-    }),
-    createCanvasTool({ config: options?.config }),
+  const tools: AnyAgentTool[] = [];
+  const browserTool = createBrowserTool({
+    sandboxBridgeUrl: options?.sandboxBrowserBridgeUrl,
+    allowHostControl: options?.allowHostBrowserControl,
+    agentSessionKey: options?.agentSessionKey,
+    sessionId: options?.sessionId,
+  });
+  const canvasTool = createCanvasTool({ config: options?.config });
+  tools.push(
+    browserTool,
+    canvasTool,
     createNodesTool({
       agentSessionKey: options?.agentSessionKey,
       agentChannel: options?.agentChannel,
@@ -214,7 +219,19 @@ export function createOpenClawTools(
     ...(webFetchTool ? [webFetchTool] : []),
     ...(imageTool ? [imageTool] : []),
     ...(pdfTool ? [pdfTool] : []),
-  ];
+  );
+  tools.push(
+    createJsReplTool({
+      sessionId: options?.sessionId,
+      agentSessionKey: options?.agentSessionKey,
+      workspaceDir,
+      getTools: () => tools,
+    }),
+    createJsReplResetTool({
+      sessionId: options?.sessionId,
+      agentSessionKey: options?.agentSessionKey,
+    }),
+  );
 
   const pluginTools = resolvePluginTools({
     context: {

@@ -38,6 +38,7 @@ export {
   navigateViaPlaywright,
   pdfViaPlaywright,
   pressKeyViaPlaywright,
+  readPageUrlViaPlaywright,
   resizeViewportViaPlaywright,
   responseBodyViaPlaywright,
   scrollIntoViewViaPlaywright,
