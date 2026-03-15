@@ -13,7 +13,7 @@ const baseConfig = {
     token: "hook-token",
     gmail: {
       account: "openclaw@gmail.com",
-      topic: "projects/demo/topics/gog-gmail-watch",
+      topic: "projects/demo/topics/gmail-watch",
       pushToken: "push-token",
     },
   },
@@ -29,7 +29,7 @@ describe("gmail hook config", () => {
           token: "hook-token",
           gmail: {
             account: "openclaw@gmail.com",
-            topic: "projects/demo/topics/gog-gmail-watch",
+            topic: "projects/demo/topics/gmail-watch",
             pushToken: "push-token",
             ...overrides,
           },
@@ -117,7 +117,7 @@ describe("gmail hook config", () => {
         hooks: {
           gmail: {
             account: "openclaw@gmail.com",
-            topic: "projects/demo/topics/gog-gmail-watch",
+            topic: "projects/demo/topics/gmail-watch",
             pushToken: "push-token",
           },
         },

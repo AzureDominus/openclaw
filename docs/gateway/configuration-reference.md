@@ -583,16 +583,6 @@ Validation and safety notes:
 {
   hooks: {
     gmail: {
-      account: "openclaw@gmail.com",
-      topic: "projects/<project-id>/topics/gog-gmail-watch",
-      subscription: "gog-gmail-watch-push",
-      pushToken: "shared-push-token",
-      hookUrl: "http://127.0.0.1:18789/hooks/gmail",
-      includeBody: true,
-      maxBytes: 20000,
-      renewEveryMinutes: 720,
-      serve: { bind: "127.0.0.1", port: 8788, path: "/" },
-      tailscale: { mode: "funnel", path: "/gmail-pubsub" },
       model: "openrouter/meta-llama/llama-3.3-70b-instruct:free",
       thinking: "off",
     },
@@ -600,8 +590,12 @@ Validation and safety notes:
 }
 ```
 
-- Gateway auto-starts `gog gmail watch serve` on boot when configured. Set `OPENCLAW_SKIP_GMAIL_WATCHER=1` to disable.
-- Don't run a separate `gog gmail watch serve` alongside the Gateway.
+- `POST /hooks/gmail` is still supported for external ingestors.
+- Gateway no longer starts or manages a Gmail Pub/Sub watcher.
+- Legacy `hooks.gmail` fields for `account`, `label`, `topic`, `subscription`,
+  `pushToken`, `hookUrl`, `includeBody`, `maxBytes`, `renewEveryMinutes`,
+  `serve.*`, and `tailscale.*` remain accepted for compatibility but are ignored by
+  current gateway builds.
 
 ---
 

@@ -7,15 +7,14 @@ import {
 } from "../config/config.js";
 
 export const DEFAULT_GMAIL_LABEL = "INBOX";
-export const DEFAULT_GMAIL_TOPIC = "gog-gmail-watch";
-export const DEFAULT_GMAIL_SUBSCRIPTION = "gog-gmail-watch-push";
+export const DEFAULT_GMAIL_TOPIC = "gmail-watch";
+export const DEFAULT_GMAIL_SUBSCRIPTION = "gmail-watch-push";
 export const DEFAULT_GMAIL_SERVE_BIND = "127.0.0.1";
 export const DEFAULT_GMAIL_SERVE_PORT = 8788;
 export const DEFAULT_GMAIL_SERVE_PATH = "/gmail-pubsub";
 export const DEFAULT_GMAIL_MAX_BYTES = 20_000;
 export const DEFAULT_GMAIL_RENEW_MINUTES = 12 * 60;
 export const DEFAULT_HOOKS_PATH = "/hooks";
-const GMAIL_WATCH_SENSITIVE_FLAGS = new Set(["--token", "--hook-url", "--hook-token"]);
 
 export type GmailHookOverrides = {
   account?: string;
@@ -80,8 +79,7 @@ export function normalizeHooksPath(raw?: string): string {
 
 export function normalizeServePath(raw?: string): string {
   const base = raw?.trim() || DEFAULT_GMAIL_SERVE_PATH;
-  // Tailscale funnel/serve strips the set-path prefix before proxying.
-  // To accept requests at /<path> externally, gog must listen on "/".
+  // Historical Pub/Sub watcher setups listened on "/" behind Tailscale.
   if (base === "/") {
     return "/";
   }
@@ -204,59 +202,6 @@ export function resolveGmailHookRuntimeConfig(
       },
     },
   };
-}
-
-export function buildGogWatchStartArgs(
-  cfg: Pick<GmailHookRuntimeConfig, "account" | "label" | "topic">,
-): string[] {
-  return [
-    "gmail",
-    "watch",
-    "start",
-    "--account",
-    cfg.account,
-    "--label",
-    cfg.label,
-    "--topic",
-    cfg.topic,
-  ];
-}
-
-export function buildGogWatchServeArgs(cfg: GmailHookRuntimeConfig): string[] {
-  const args = [
-    "gmail",
-    "watch",
-    "serve",
-    "--account",
-    cfg.account,
-    "--bind",
-    cfg.serve.bind,
-    "--port",
-    String(cfg.serve.port),
-    "--path",
-    cfg.serve.path,
-    "--token",
-    cfg.pushToken,
-    "--hook-url",
-    cfg.hookUrl,
-    "--hook-token",
-    cfg.hookToken,
-  ];
-  if (cfg.includeBody) {
-    args.push("--include-body");
-  }
-  if (cfg.maxBytes > 0) {
-    args.push("--max-bytes", String(cfg.maxBytes));
-  }
-  return args;
-}
-
-export function buildGogWatchServeLogArgs(cfg: GmailHookRuntimeConfig): string[] {
-  return buildGogWatchServeArgs(cfg).filter(
-    (arg, index, args) =>
-      !GMAIL_WATCH_SENSITIVE_FLAGS.has(arg) &&
-      !GMAIL_WATCH_SENSITIVE_FLAGS.has(args[index - 1] ?? ""),
-  );
 }
 
 export function buildTopicPath(projectId: string, topicName: string): string {

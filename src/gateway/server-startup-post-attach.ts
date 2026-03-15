@@ -207,16 +207,6 @@ export async function startGatewaySidecars(params: {
     }
   });
 
-  await measureStartup(params.startupTrace, "sidecars.gmail-watch", async () => {
-    if (params.cfg.hooks?.enabled && params.cfg.hooks.gmail?.account) {
-      const { startGmailWatcherWithLogs } = await import("../hooks/gmail-watcher-lifecycle.js");
-      await startGmailWatcherWithLogs({
-        cfg: params.cfg,
-        log: params.logHooks,
-      });
-    }
-  });
-
   await measureStartup(params.startupTrace, "sidecars.gmail-model", async () => {
     if (params.cfg.hooks?.gmail?.model) {
       const [

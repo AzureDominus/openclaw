@@ -6,7 +6,6 @@ import type {
 
 const hoisted = vi.hoisted(() => {
   const startPluginServices = vi.fn(async () => null);
-  const startGmailWatcherWithLogs = vi.fn(async () => undefined);
   const loadInternalHooks = vi.fn(async () => 0);
   const setInternalHooksEnabled = vi.fn();
   const hasInternalHookListeners = vi.fn(() => false);
@@ -28,7 +27,6 @@ const hoisted = vi.hoisted(() => {
   }));
   return {
     startPluginServices,
-    startGmailWatcherWithLogs,
     loadInternalHooks,
     setInternalHooksEnabled,
     hasInternalHookListeners,
@@ -69,10 +67,6 @@ vi.mock("../config/paths.js", async () => {
     resolveStateDir: vi.fn(() => "/tmp/openclaw-state"),
   };
 });
-
-vi.mock("../hooks/gmail-watcher-lifecycle.js", () => ({
-  startGmailWatcherWithLogs: hoisted.startGmailWatcherWithLogs,
-}));
 
 vi.mock("../hooks/internal-hooks.js", () => ({
   createInternalHookEvent: hoisted.createInternalHookEvent,
@@ -135,7 +129,6 @@ type PostAttachRuntimeDeps = NonNullable<Parameters<typeof startGatewayPostAttac
 describe("startGatewayPostAttachRuntime", () => {
   beforeEach(() => {
     hoisted.startPluginServices.mockClear();
-    hoisted.startGmailWatcherWithLogs.mockClear();
     hoisted.loadInternalHooks.mockClear();
     hoisted.setInternalHooksEnabled.mockClear();
     hoisted.hasInternalHookListeners.mockReset();

@@ -406,17 +406,10 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
       },
     ],
     gmail: {
-      account: "openclaw@gmail.com",
-      label: "INBOX",
-      topic: "projects/<project-id>/topics/gog-gmail-watch",
-      subscription: "gog-gmail-watch-push",
-      pushToken: "shared-push-token",
-      hookUrl: "http://127.0.0.1:18789/hooks/gmail",
-      includeBody: true,
-      maxBytes: 20000,
-      renewEveryMinutes: 720,
-      serve: { bind: "127.0.0.1", port: 8788, path: "/" },
-      tailscale: { mode: "funnel", path: "/gmail-pubsub" },
+      // /hooks/gmail still works with an external ingestor.
+      // Legacy Pub/Sub watcher fields are omitted here because the gateway no longer manages them.
+      model: "openai/gpt-5.2-mini",
+      thinking: "off",
     },
   },
 

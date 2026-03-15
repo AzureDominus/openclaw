@@ -64,7 +64,6 @@ function isNoopReloadPlan(plan: GatewayReloadPlan): boolean {
     !plan.restartGateway &&
     plan.hotReasons.length === 0 &&
     !plan.reloadHooks &&
-    !plan.restartGmailWatcher &&
     !plan.restartCron &&
     !plan.restartHeartbeat &&
     !plan.restartHealthMonitor &&
