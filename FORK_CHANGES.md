@@ -55,7 +55,16 @@ So this is intentionally a "what is different in this fork" inventory, not a raw
 - Main evidence: `64dea1a5a0`, `97c62fe6af`, `6300ec25b5`, `c0ed9da95f`, `0749df929f`.
 - Key files: `src/agents/pi-embedded-runner/run.ts`, `src/agents/stop-reason.ts`, `src/agents/system-prompt.ts`, `src/config/types.agent-defaults.ts`.
 
-### 6. Model retry behavior changed materially before fallback
+### 6. The system prompt itself changed in meaningful ways
+
+- The prompt now explicitly requires better progress-update behavior during multi-step work instead of only allowing silent tool use.
+- It teaches the agent to end tool-less turns with an `OPENCLAW_STOP_REASON` marker when enabled, and that prompt guidance is tied to the continue-guard configuration.
+- It now explicitly tells the agent that browser screenshots and other tool-generated media are not auto-attached to replies and must be sent via the `message` tool when needed.
+- It also tells the agent not to narrate ack-only reactions and advertises the new browser/`js_repl` capabilities directly in the prompt/tool summaries.
+- Main evidence: `97c62fe6af`, `c0ed9da95f`, `e0755bc24d`, `d538bd2e50`, `a8a217a0d5`.
+- Key files: `src/agents/system-prompt.ts`, `src/agents/system-prompt.test.ts`, `src/auto-reply/reply/commands-system-prompt.ts`, `src/agents/pi-embedded-runner/system-prompt.ts`.
+
+### 7. Model retry behavior changed materially before fallback
 
 - Added per-model retry backoff and retry notices.
 - Added better handling for Codex server failures and overloaded model failures.
@@ -63,14 +72,14 @@ So this is intentionally a "what is different in this fork" inventory, not a raw
 - Main evidence: `ee3edbf55d`, `817e9ab635`, `fb1abf5608`, `6014810f0b`, `f6d99f8772`.
 - Key files: `src/agents/model-fallback.ts`, `src/config/types.agent-defaults.ts`, `src/config/sessions/transcript.ts`.
 
-### 7. Reply delivery is more durable and recoverable
+### 8. Reply delivery is more durable and recoverable
 
 - Added retry-aware block delivery, a durable dispatch queue, recovery fixes, and live outbound retry handling.
 - This is one of the bigger behavior changes because it affects whether replies survive transient delivery failures instead of being dropped.
 - Main evidence: `f890b366b3`, `cebeb24760`, `4ed6e2994d`.
 - Key files: `src/auto-reply/reply/block-reply-pipeline.ts`, `src/auto-reply/reply/reply-dispatcher.ts`, `src/infra/outbound/delivery-queue.ts`, `src/infra/outbound/deliver.ts`.
 
-### 8. Telegram queueing and command sync got much more robust
+### 9. Telegram queueing and command sync got much more robust
 
 - Fixed queued updates being dropped after control-lane activity.
 - Preserved steer updates by keying the sequential queue per message.
@@ -79,53 +88,53 @@ So this is intentionally a "what is different in this fork" inventory, not a raw
 - Main evidence: `80d7216005`, `296669dc86`, `2b5c092319`, `4df1a90e48`, `3732402fbc`, `60057d0094`.
 - Key files: `src/telegram/bot.ts`, `src/telegram/sequential-key.ts`, `src/telegram/bot-native-command-menu.ts`, `src/agents/tools/telegram-actions.ts`.
 
-### 9. Telegram zero-delivery finals are explicitly handled now
+### 10. Telegram zero-delivery finals are explicitly handled now
 
 - The fork adds logic for "routed final reply reported success but nothing actually reached Telegram" cases.
 - Instead of treating that as clean success, the delivery path now distinguishes visible delivery from zero-delivery outcomes and adds fallback/recovery behavior.
 - Main evidence: `df358bd5e8`, `f50223bfd2`.
 - Key files: `src/telegram/bot-message-dispatch.ts`, `src/telegram/bot/delivery.ts`, `src/auto-reply/reply/routed-final-delivery.ts`, `src/infra/outbound/deliver.ts`.
 
-### 10. `/usage` now defaults to provider quota style reporting
+### 11. `/usage` now defaults to provider quota style reporting
 
 - Changed `/usage` to default to provider quota reporting and improved how command/tool-call usage is formatted.
 - This is a user-visible output change, not just an internal refactor.
 - Main evidence: `5729ad2c5f`, `1667e45b9f`.
 - Key files: `src/auto-reply/reply/commands-session.ts`, `src/infra/provider-usage.fetch.codex.ts`, `src/infra/provider-usage.format.ts`.
 
-### 11. Added a standalone local agent chat editor
+### 12. Added a standalone local agent chat editor
 
 - New script for browsing/editing agent chat transcripts and sessions locally.
 - Exposed as the `agent-chat-editor` package script.
 - Main evidence: `463e94306e`.
 - Key files: `scripts/agent-chat-editor.ts`, `package.json`.
 
-### 12. Control UI now shows raw tool call/output detail better
+### 13. Control UI now shows raw tool call/output detail better
 
 - The UI can show raw tool-call arguments and tool output in the sidebar with better wrapping and preview behavior.
 - This makes debugging agent/tool interactions easier than the stock summarized card view alone.
 - Main evidence: `88d473e997`.
 - Key files: `ui/src/ui/chat/tool-cards.ts`, `ui/src/ui/chat/tool-helpers.ts`, `ui/src/styles/chat/sidebar.css`.
 
-### 13. Gateway `--force` got safer against stale processes
+### 14. Gateway `--force` got safer against stale processes
 
 - The fork hardened forced gateway startup/shutdown behavior so stale processes and locked ports are handled more aggressively and predictably.
 - Main evidence: `1d69a4482e`.
 - Key files: `src/cli/gateway-cli/run.ts`, `src/cli/ports.ts`, `src/infra/gateway-lock.ts`.
 
-### 14. WhatsApp initial connect ETIMEDOUT is retried
+### 15. WhatsApp initial connect ETIMEDOUT is retried
 
 - Fixed the case where an initial WhatsApp connection timeout would cause the channel to exit instead of retrying with reconnect backoff.
 - Main evidence: `6a18f25649`.
 - Key file: `src/web/auto-reply/monitor.ts`.
 
-### 15. Heartbeat session rotation recovery was restored
+### 16. Heartbeat session rotation recovery was restored
 
 - Heartbeat runs now restore rotated ack-only sessions more reliably.
 - Main evidence: `f72f99082d`.
 - Key file: `src/infra/heartbeat-runner.ts`.
 
-### 16. Docker/dev runtime is customized well beyond upstream defaults
+### 17. Docker/dev runtime is customized well beyond upstream defaults
 
 - Added non-root npm global installs for skills.
 - Added Homebrew support in the container.
@@ -133,14 +142,14 @@ So this is intentionally a "what is different in this fork" inventory, not a raw
 - Main evidence: `038b7669c6`, `7adf6cc954`, `53624e36fe`, `2206c9dcec`, `7d0ea6da41`, `1a98bafa2e`, `c68bcea4fd`, `9588bdecb8`, `5562ae5bd6`, `a3ea099b40`, `b614488544`, `d9995bdd70`, `05e9c57e66`.
 - Key files: `Dockerfile`, `docker-compose.yml`, `docker-compose.override.yml`.
 
-### 17. Added a fork-specific cloud-init/VPS bootstrap path
+### 18. Added a fork-specific cloud-init/VPS bootstrap path
 
 - Introduced `cloud-init.yaml` for a prebuilt VPS bootstrap flow tailored to this fork.
 - Includes OpenClaw setup, Tailscale-oriented host bootstrapping, and RustDesk installation/configuration.
 - Main evidence: `9e95d67886`, `4d4ba8e1bb`, `b70ab3365c`, `90d8c27c73`, `ea73c4aa76`, `e15764cefa`.
 - Key file: `cloud-init.yaml`.
 
-### 18. The local skill surface expanded substantially
+### 19. The local skill surface expanded substantially
 
 - Added a large pack of local workflow skills that are not part of stock upstream here, including:
   - `skills/av-media`
@@ -161,7 +170,7 @@ So this is intentionally a "what is different in this fork" inventory, not a raw
   - `skills/video-download`
 - Main evidence: `8fd4aeb771`, `2d19408c2d`, `e595499e3c`, `d135c904bd`, `0814c24585`, `466c4564ce`, `cb7a398327`, `8fa009c5c0`, `64613f4ae3`, `a8a217a0d5`.
 
-### 19. Google automation changed from legacy watcher flow to `gws`
+### 20. Google automation changed from legacy watcher flow to `gws`
 
 - Replaced the `gog` skill with `gws`.
 - Removed the legacy Gmail watcher setup/run flow and now treats Gmail webhook ingestion as an external ingestor concern rather than an in-repo watcher lifecycle.
@@ -169,13 +178,44 @@ So this is intentionally a "what is different in this fork" inventory, not a raw
 - Main evidence: `8864049070`.
 - Key files: `skills/gws/SKILL.md`, `src/cli/webhooks-cli.ts`, `src/hooks/gmail-watcher.ts`.
 
-### 20. The fork intentionally diverges from upstream maintenance workflow
+### 21. The fork intentionally diverges from upstream maintenance workflow
 
 - Removed most upstream GitHub Actions workflows from the fork.
 - Removed the `scripts/committer` helper and its docs guidance.
 - Added a repo-local Codex `upstream-release-sync` prompt for maintaining the fork.
 - Main evidence: `817607761d`, `a180ae65f3`, `e78a5235f0`, `bab37e738a`.
 - Key files: `.github/workflows/*`, `.codex/prompts/upstream-release-sync.md`.
+
+## Additional Differences I Missed On The First Pass
+
+### A. Live steering and transcript-event handling changed
+
+- Active non-streaming runs can now accept steer injection instead of only fully streaming runs.
+- Outbound reply processing now ignores `delivery-mirror` transcript events so mirrored delivery metadata does not get treated like fresh assistant content.
+- Browser tool media is no longer auto-delivered like a normal reply payload.
+- Main evidence: `0d46e035e8`, `4d46b92fb0`, `648dffc1f4`.
+- Key files: `src/agents/pi-embedded-runner/runs.ts`, `src/agents/pi-embedded-subscribe.handlers.messages.ts`, `src/agents/pi-embedded-subscribe.handlers.tools.ts`.
+
+### B. Reply/output sanitization got stricter
+
+- The fork strips leaked `+# assistant` draft tails from outbound text.
+- It suppresses leaked heartbeat acknowledgements and leaked `OPENCLAW_STOP_REASON` markers from user-visible replies.
+- Main evidence: `ce51b4b425`, `98f43d80dc`.
+- Key files: `src/auto-reply/reply/normalize-reply.ts`, `src/auto-reply/reply/reply-utils.test.ts`, `src/agents/pi-embedded-runner/run/payloads.ts`.
+
+### C. Debugging/internal leak hardening also changed
+
+- Added Codex SSE frame capture and extra hardening around leaked tool-call scaffolding/drafts.
+- This is less user-facing than the other entries, but it is still a real fork difference that affects debugging and reply cleanliness.
+- Main evidence: `84d64375d3`.
+- Key files: `src/agents/pi-embedded-runner/run.ts`, `src/agents/tool-call-draft.ts`, `src/agents/pi-embedded-helpers/errors.ts`.
+
+### D. WhatsApp auto-document gating changed for browser docs
+
+- In WhatsApp auto mode, browser-generated document uploads are now gated by size only rather than the broader image heuristics.
+- This is a narrower but still real behavior difference from stock handling.
+- Main evidence: `dd8a2b9747`.
+- Key files: `src/web/outbound.ts`, `src/web/outbound.test.ts`.
 
 ## Short Version
 
