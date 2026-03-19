@@ -146,6 +146,17 @@ describe("extractToolResultMediaPaths", () => {
     expect(extractToolResultMediaPaths(result)).toEqual([]);
   });
 
+  it("returns empty array for browser-style image results with filePath but no details.path", () => {
+    const result = {
+      content: [
+        { type: "text", text: "Screenshot saved to /tmp/generated.png" },
+        { type: "image", data: "base64data", mimeType: "image/png" },
+      ],
+      details: { filePath: "/tmp/generated.png" },
+    };
+    expect(extractToolResultMediaPaths(result)).toEqual([]);
+  });
+
   it("does not fall back to details.path when MEDIA: paths are found", () => {
     const result = {
       content: [

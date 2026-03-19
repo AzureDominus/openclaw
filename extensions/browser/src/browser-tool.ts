@@ -758,6 +758,8 @@ export function createBrowserTool(opts?: {
             label: "browser:screenshot",
             path: result.path,
             details: result,
+            includeMediaDirective: false,
+            includeDetailsPath: false,
           });
         }
         case "navigate": {

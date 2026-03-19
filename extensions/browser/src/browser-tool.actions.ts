@@ -437,6 +437,8 @@ export async function executeSnapshotAction(params: {
         path: snapshot.imagePath,
         extraText: wrappedSnapshot,
         details: safeDetails,
+        includeMediaDirective: false,
+        includeDetailsPath: false,
       });
     }
     return {
