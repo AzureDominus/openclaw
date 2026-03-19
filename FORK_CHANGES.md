@@ -172,9 +172,10 @@ So this is intentionally a "what is different in this fork right now" inventory,
 
 ### 20. Transcript-event handling and tool-media delivery changed
 
+- Outbound reply processing now ignores `delivery-mirror` transcript events so mirrored delivery metadata does not get treated like fresh assistant content.
 - Browser tool media is no longer auto-delivered like a normal reply payload.
-- Main evidence: `648dffc1f4`.
-- Key file: `src/agents/pi-embedded-subscribe.handlers.tools.ts`.
+- Main evidence: `4d46b92fb0`, `648dffc1f4`.
+- Key files: `src/agents/pi-embedded-subscribe.handlers.messages.ts`, `src/agents/pi-embedded-subscribe.handlers.tools.ts`.
 
 ### 21. Reply/output sanitization got stricter
 
