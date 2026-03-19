@@ -13,7 +13,7 @@ const mockMessage = (message: Pick<Message, "chat"> & Partial<Message>): Message
 
 describe("getTelegramSequentialKey", () => {
   it.each([
-    [{ message: mockMessage({ chat: mockChat({ id: 123 }) }) }, "telegram:123"],
+    [{ message: mockMessage({ chat: mockChat({ id: 123 }) }) }, "telegram:123:msg:1"],
     [
       {
         message: mockMessage({
@@ -21,7 +21,7 @@ describe("getTelegramSequentialKey", () => {
           message_thread_id: 9,
         }),
       },
-      "telegram:123:topic:9",
+      "telegram:123:topic:9:msg:1",
     ],
     [
       {
@@ -30,7 +30,7 @@ describe("getTelegramSequentialKey", () => {
           message_thread_id: 9,
         }),
       },
-      "telegram:123",
+      "telegram:123:msg:1",
     ],
     [
       {
@@ -38,14 +38,14 @@ describe("getTelegramSequentialKey", () => {
           chat: mockChat({ id: 123, type: "supergroup", is_forum: true }),
         }),
       },
-      "telegram:123:topic:1",
+      "telegram:123:topic:1:msg:1",
     ],
-    [{ update: { message: mockMessage({ chat: mockChat({ id: 555 }) }) } }, "telegram:555"],
+    [{ update: { message: mockMessage({ chat: mockChat({ id: 555 }) }) } }, "telegram:555:msg:1"],
     [
       {
         channelPost: mockMessage({ chat: mockChat({ id: -100777111222, type: "channel" }) }),
       },
-      "telegram:-100777111222",
+      "telegram:-100777111222:msg:1",
     ],
     [
       {
@@ -53,13 +53,16 @@ describe("getTelegramSequentialKey", () => {
           channel_post: mockMessage({ chat: mockChat({ id: -100777111223, type: "channel" }) }),
         },
       },
-      "telegram:-100777111223",
+      "telegram:-100777111223:msg:1",
     ],
     [
       { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/stop" }) },
       "telegram:123:control",
     ],
-    [{ message: mockMessage({ chat: mockChat({ id: 123 }), text: "/status" }) }, "telegram:123"],
+    [
+      { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/status" }) },
+      "telegram:123:msg:1",
+    ],
     [
       { message: mockMessage({ chat: mockChat({ id: 123 }), text: "stop" }) },
       "telegram:123:control",
@@ -80,11 +83,17 @@ describe("getTelegramSequentialKey", () => {
       { message: mockMessage({ chat: mockChat({ id: 123 }), text: "halt" }) },
       "telegram:123:control",
     ],
-    [{ message: mockMessage({ chat: mockChat({ id: 123 }), text: "/abort" }) }, "telegram:123"],
-    [{ message: mockMessage({ chat: mockChat({ id: 123 }), text: "/abort now" }) }, "telegram:123"],
+    [
+      { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/abort" }) },
+      "telegram:123:msg:1",
+    ],
+    [
+      { message: mockMessage({ chat: mockChat({ id: 123 }), text: "/abort now" }) },
+      "telegram:123:msg:1",
+    ],
     [
       { message: mockMessage({ chat: mockChat({ id: 123 }), text: "please do not do that" }) },
-      "telegram:123",
+      "telegram:123:msg:1",
     ],
   ])("resolves key %#", (input, expected) => {
     expect(getTelegramSequentialKey(input)).toBe(expected);

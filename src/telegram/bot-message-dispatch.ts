@@ -538,12 +538,6 @@ export const dispatchTelegramMessage = async ({
         ...prefixOptions,
         typingCallbacks,
         stripStopReasonMarker: true,
-        durableRoute: {
-          channel: "telegram",
-          to: String(chatId),
-          accountId: route.accountId,
-          threadId: threadSpec?.id ?? null,
-        },
         deliver: async (payload, info) => {
           if (info.kind === "final") {
             // Assistant callbacks are fire-and-forget; ensure queued boundary
