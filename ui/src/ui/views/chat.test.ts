@@ -158,6 +158,36 @@ function createProps(overrides: Partial<ChatProps> = {}): ChatProps {
 }
 
 describe("chat view", () => {
+  it("uses fresh totalTokens for the context warning instead of cumulative inputTokens", () => {
+    const container = document.createElement("div");
+    render(
+      renderChat(
+        createProps({
+          sessions: {
+            ts: 0,
+            path: "",
+            count: 1,
+            defaults: { model: "gpt-5", contextTokens: null },
+            sessions: [
+              {
+                key: "main",
+                kind: "direct",
+                updatedAt: null,
+                inputTokens: 832_500,
+                totalTokens: 120_000,
+                totalTokensFresh: true,
+                contextTokens: 258_000,
+              },
+            ],
+          },
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".context-notice")).toBeNull();
+  });
+
   it("uses the assistant avatar URL for the welcome state when the identity avatar is only initials", () => {
     const container = document.createElement("div");
     render(

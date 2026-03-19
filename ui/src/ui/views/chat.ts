@@ -254,7 +254,12 @@ function renderContextNotice(
   session: GatewaySessionRow | undefined,
   defaultContextTokens: number | null,
 ) {
-  const used = session?.inputTokens ?? 0;
+  const used =
+    typeof session?.totalTokens === "number" &&
+    Number.isFinite(session.totalTokens) &&
+    (session.totalTokensFresh ?? true)
+      ? session.totalTokens
+      : (session?.inputTokens ?? 0);
   const limit = session?.contextTokens ?? defaultContextTokens ?? 0;
   if (!used || !limit) {
     return nothing;
