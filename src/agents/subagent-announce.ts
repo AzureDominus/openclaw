@@ -701,8 +701,7 @@ async function maybeQueueSubagentAnnounce(params: {
 
   const shouldSteer = queueSettings.mode === "steer" || queueSettings.mode === "steer-backlog";
   if (shouldSteer) {
-    const steerResult = await queueEmbeddedPiMessage(sessionId, params.steerMessage);
-    if (steerResult.status === "queued") {
+    if (queueEmbeddedPiMessage(sessionId, params.steerMessage)) {
       return "steered";
     }
   }

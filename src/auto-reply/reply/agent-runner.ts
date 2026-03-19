@@ -195,8 +195,8 @@ export async function runReplyAgent(params: {
   };
 
   if (shouldSteer && isStreaming) {
-    const steerResult = await queueEmbeddedPiMessage(followupRun.run.sessionId, followupRun.prompt);
-    if (steerResult.status === "queued" && !shouldFollowup) {
+    const queued = queueEmbeddedPiMessage(followupRun.run.sessionId, followupRun.prompt);
+    if (queued && !shouldFollowup) {
       await touchActiveSessionEntry();
       typing.cleanup();
       return undefined;
