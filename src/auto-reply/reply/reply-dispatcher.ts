@@ -67,7 +67,6 @@ export type ReplyDispatcherOptions = {
   responsePrefix?: string;
   transformReplyPayload?: (payload: ReplyPayload) => ReplyPayload | null;
   enableSlackInteractiveReplies?: boolean;
-  stripStopReasonMarker?: boolean;
   /** Static context for response prefix template interpolation. */
   responsePrefixContext?: ResponsePrefixContext;
   /** Dynamic context provider for response prefix template interpolation.
@@ -103,7 +102,6 @@ type NormalizeReplyPayloadInternalOptions = Pick<
   ReplyDispatcherOptions,
   | "responsePrefix"
   | "enableSlackInteractiveReplies"
-  | "stripStopReasonMarker"
   | "responsePrefixContext"
   | "responsePrefixContextProvider"
   | "onHeartbeatStrip"
@@ -122,7 +120,6 @@ function normalizeReplyPayloadInternal(
   return normalizeReplyPayload(payload, {
     responsePrefix: opts.responsePrefix,
     enableSlackInteractiveReplies: opts.enableSlackInteractiveReplies,
-    stripStopReasonMarker: opts.stripStopReasonMarker,
     responsePrefixContext: prefixContext,
     onHeartbeatStrip: opts.onHeartbeatStrip,
     transformReplyPayload: opts.transformReplyPayload,

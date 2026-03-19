@@ -32,6 +32,12 @@ export type ActiveEmbeddedRunSnapshot = {
   inFlightPrompt?: string;
 };
 
+export type QueueEmbeddedPiMessageResult =
+  | { status: "queued" }
+  | { status: "no-active" }
+  | { status: "inactive" }
+  | { status: "error"; error: string };
+
 type EmbeddedRunWaiter = {
   resolve: (ended: boolean) => void;
   timer: NodeJS.Timeout;
@@ -96,31 +102,29 @@ function clearActiveRunSessionKeys(sessionId: string, sessionKey?: string): void
   }
 }
 
-export function queueEmbeddedPiMessage(sessionId: string, text: string): boolean {
+export async function queueEmbeddedPiMessage(
+  sessionId: string,
+  text: string,
+): Promise<QueueEmbeddedPiMessageResult> {
   const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
   if (!handle) {
     const queuedReplyRunMessage = queueReplyRunMessage(sessionId, text);
     if (queuedReplyRunMessage) {
       logMessageQueued({ sessionId, source: "pi-embedded-runner" });
-      return true;
+      return { status: "queued" };
     }
     diag.debug(`queue message failed: sessionId=${sessionId} reason=no_active_run`);
-    return false;
+    return { status: "no-active" };
   }
-  if (!handle.isStreaming()) {
-    diag.debug(`queue message failed: sessionId=${sessionId} reason=not_streaming`);
-    return false;
-  }
-  if (handle.isCompacting()) {
-    diag.debug(`queue message failed: sessionId=${sessionId} reason=compacting`);
-    return false;
-  }
-  logMessageQueued({ sessionId, source: "pi-embedded-runner" });
-  void handle.queueMessage(text).catch((error) => {
+  try {
+    logMessageQueued({ sessionId, source: "pi-embedded-runner" });
+    await handle.queueMessage(text);
+    return { status: "queued" };
+  } catch (error) {
     const err = error instanceof Error ? error.message : String(error);
     diag.warn(`queue message failed: sessionId=${sessionId} reason=error error=${err}`);
-  });
-  return true;
+    return { status: "error", error: err };
+  }
 }
 
 /**

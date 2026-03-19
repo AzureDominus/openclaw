@@ -93,7 +93,7 @@ const embeddedPiRunStreamingMock = vi.fn<typeof piEmbedded.isEmbeddedPiRunStream
   (_sessionId: string) => false,
 );
 const queueEmbeddedPiMessageMock = vi.fn<typeof piEmbedded.queueEmbeddedPiMessage>(
-  (_sessionId: string, _text: string) => false,
+  async (_sessionId: string, _text: string) => ({ status: "no-active" }),
 );
 const waitForEmbeddedPiRunEndMock = vi.fn<typeof piEmbedded.waitForEmbeddedPiRunEnd>(
   async (_sessionId: string, _timeoutMs?: number) => true,
@@ -316,7 +316,7 @@ describe("subagent announce formatting", () => {
       );
     embeddedRunMock.isEmbeddedPiRunActive.mockClear().mockReturnValue(false);
     embeddedRunMock.isEmbeddedPiRunStreaming.mockClear().mockReturnValue(false);
-    embeddedRunMock.queueEmbeddedPiMessage.mockClear().mockReturnValue(false);
+    embeddedRunMock.queueEmbeddedPiMessage.mockClear().mockResolvedValue({ status: "no-active" });
     embeddedRunMock.waitForEmbeddedPiRunEnd.mockClear().mockResolvedValue(true);
     subagentRegistryMock.isSubagentSessionRunActive.mockClear().mockReturnValue(true);
     subagentRegistryMock.shouldIgnorePostCompletionAnnounceForSession

@@ -221,12 +221,6 @@ describe("gateway hot reload", () => {
     await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
   }
 
-  async function writeOwnedNodeScript(scriptPath: string, source: string) {
-    await fs.mkdir(path.dirname(scriptPath), { recursive: true });
-    await fs.writeFile(scriptPath, `#!/usr/bin/env node\n${source}`, "utf8");
-    await fs.chmod(scriptPath, 0o700);
-  }
-
   async function writeTalkApiKeyEnvRefConfig(refId = "TALK_API_KEY_REF") {
     await writeConfigFile({
       talk: {
@@ -236,15 +230,6 @@ describe("gateway hot reload", () => {
   }
 
   async function writeGatewayTraversalExecRefConfig() {
-    const stateDir = process.env.OPENCLAW_STATE_DIR;
-    if (!stateDir) {
-      throw new Error("OPENCLAW_STATE_DIR is not set");
-    }
-    const commandPath = path.join(stateDir, "gateway-traversal-exec-provider.cjs");
-    await writeOwnedNodeScript(
-      commandPath,
-      'process.stdout.write(JSON.stringify({ protocolVersion: 1, values: {} }) + "\\n");\n',
-    );
     await writeConfigFile({
       gateway: {
         auth: {
@@ -256,7 +241,7 @@ describe("gateway hot reload", () => {
         providers: {
           vault: {
             source: "exec",
-            command: commandPath,
+            command: process.execPath,
           },
         },
       },
@@ -264,7 +249,7 @@ describe("gateway hot reload", () => {
   }
 
   async function writeGatewayTokenExecRefConfig(params: {
-    commandPath: string;
+    resolverScriptPath: string;
     modePath: string;
     tokenValue: string;
   }) {
@@ -279,8 +264,9 @@ describe("gateway hot reload", () => {
         providers: {
           vault: {
             source: "exec",
-            command: params.commandPath,
-            args: [params.modePath, params.tokenValue],
+            command: process.execPath,
+            allowSymlinkCommand: true,
+            args: [params.resolverScriptPath, params.modePath, params.tokenValue],
           },
         },
       },
@@ -757,11 +743,12 @@ describe("gateway hot reload", () => {
     if (!stateDir) {
       throw new Error("OPENCLAW_STATE_DIR is not set");
     }
-    const commandPath = path.join(stateDir, "gateway-auth-token-resolver.cjs");
+    const resolverScriptPath = path.join(stateDir, "gateway-auth-token-resolver.cjs");
     const modePath = path.join(stateDir, "gateway-auth-token-resolver.mode");
     const tokenValue = "gateway-auth-exec-token";
-    await writeOwnedNodeScript(
-      commandPath,
+    await fs.mkdir(path.dirname(resolverScriptPath), { recursive: true });
+    await fs.writeFile(
+      resolverScriptPath,
       `const fs = require("node:fs");
 let input = "";
 process.stdin.setEncoding("utf8");
@@ -796,10 +783,11 @@ process.stdin.on("end", () => {
   process.stdout.write(JSON.stringify({ protocolVersion: 1, values }) + "\\n");
 });
 `,
+      "utf8",
     );
     await fs.writeFile(modePath, "ok\n", "utf8");
     await writeGatewayTokenExecRefConfig({
-      commandPath,
+      resolverScriptPath,
       modePath,
       tokenValue,
     });

@@ -53,7 +53,9 @@ describe("sessions_yield orchestration", () => {
     expect(isEmbeddedPiRunActive(sessionId)).toBe(false);
 
     // 4. Steer would fail (message delivery must take direct path, not steer)
-    expect(queueEmbeddedPiMessage(sessionId, "subagent result")).toBe(false);
+    await expect(queueEmbeddedPiMessage(sessionId, "subagent result")).resolves.toEqual({
+      status: "no-active",
+    });
   });
 
   it("clientToolCall takes precedence over yieldDetected", async () => {

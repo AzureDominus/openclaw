@@ -458,11 +458,11 @@ async function maybeQueueSubagentAnnounce(params: {
 
   const shouldSteer = queueSettings.mode === "steer" || queueSettings.mode === "steer-backlog";
   if (shouldSteer) {
-    const steered = subagentAnnounceDeliveryDeps.queueEmbeddedPiMessage(
+    const steerResult = await subagentAnnounceDeliveryDeps.queueEmbeddedPiMessage(
       sessionId,
       params.steerMessage,
     );
-    if (steered) {
+    if (steerResult.status === "queued") {
       return "steered";
     }
   }
@@ -694,13 +694,13 @@ async function sendSubagentAnnounceDirectly(params: {
         : "";
     const requesterActivity = resolveRequesterSessionActivity(canonicalRequesterSessionKey);
     if (params.expectsCompletionMessage && requesterActivity.sessionId) {
-      const woke = requesterActivity.sessionId
-        ? subagentAnnounceDeliveryDeps.queueEmbeddedPiMessage(
+      const wakeResult = requesterActivity.sessionId
+        ? await subagentAnnounceDeliveryDeps.queueEmbeddedPiMessage(
             requesterActivity.sessionId,
             params.triggerMessage,
           )
-        : false;
-      if (woke) {
+        : { status: "no-active" as const };
+      if (wakeResult.status === "queued") {
         return {
           delivered: true,
           path: "steered",
