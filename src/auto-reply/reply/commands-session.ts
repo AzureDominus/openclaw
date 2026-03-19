@@ -38,6 +38,7 @@ import { parseSendPolicyCommand } from "../send-policy.js";
 import { normalizeFastMode, normalizeUsageDisplay, resolveResponseUsageMode } from "../thinking.js";
 import { resolveCommandSurfaceChannel } from "./channel-context.js";
 import { rejectNonOwnerCommand, rejectUnauthorizedCommand } from "./command-gates.js";
+import { buildContextUsageReply } from "./commands-context-report.js";
 import { handleAbortTrigger, handleStopCommand } from "./commands-session-abort.js";
 import { persistSessionEntry } from "./commands-session-store.js";
 import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
@@ -399,6 +400,7 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
   const lowerArgs = rawArgs.toLowerCase();
   const requested = rawArgs ? normalizeUsageDisplay(rawArgs) : undefined;
   const isCostRequest = lowerArgs.startsWith("cost");
+  const isContextRequest = lowerArgs === "context";
   const isQuotaRequest = !rawArgs || lowerArgs === "quota" || lowerArgs === "rate";
   const isNextRequest = lowerArgs === "next";
   const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
@@ -458,6 +460,13 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
     };
   }
 
+  if (isContextRequest) {
+    return {
+      shouldContinue: false,
+      reply: await buildContextUsageReply(params),
+    };
+  }
+
   if (isQuotaRequest) {
     const providerUsage = await loadCurrentProviderUsage(params, Date.now());
     return {
@@ -478,7 +487,7 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
   if (rawArgs && !requested && !isNextRequest) {
     return {
       shouldContinue: false,
-      reply: { text: "Usage: /usage | /usage rate|cost|next|off|tokens|full" },
+      reply: { text: "Usage: /usage | /usage rate|cost|context|next|off|tokens|full" },
     };
   }
 

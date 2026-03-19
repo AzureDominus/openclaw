@@ -604,16 +604,17 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
     defineChatCommand({
       key: "usage",
       nativeName: "usage",
-      description: "Provider usage, usage footer mode, or cost summary.",
+      description:
+        "Provider rate usage, cost summary, session context usage, or usage footer mode.",
       textAlias: "/usage",
       category: "options",
       tier: "standard",
       args: [
         {
           name: "mode",
-          description: "rate, cost, next, off, tokens, or full",
+          description: "rate, cost, context, next, off, tokens, or full",
           type: "string",
-          choices: ["rate", "cost", "next", "off", "tokens", "full"],
+          choices: ["rate", "cost", "context", "next", "off", "tokens", "full"],
         },
       ],
       argsMenu: "auto",

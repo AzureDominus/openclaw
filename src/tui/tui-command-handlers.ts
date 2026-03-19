@@ -496,9 +496,14 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         }
         break;
       case "usage": {
+        const reportModes = new Set(["rate", "quota", "cost", "context"]);
+        if (args && reportModes.has(args.trim().toLowerCase())) {
+          await sendMessage(`/usage ${args.trim().toLowerCase()}`);
+          break;
+        }
         const normalized = args ? normalizeUsageDisplay(args) : undefined;
         if (args && !normalized) {
-          chatLog.addSystem("usage: /usage <off|tokens|full>");
+          chatLog.addSystem("usage: /usage <rate|cost|context|off|tokens|full>");
           break;
         }
         const currentRaw = state.sessionInfo.responseUsage;
