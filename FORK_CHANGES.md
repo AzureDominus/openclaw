@@ -170,7 +170,7 @@ So this is intentionally a "what is different in this fork right now" inventory,
 - Main evidence: `817607761d`, `a180ae65f3`, `e78a5235f0`, `bab37e738a`.
 - Key files: `.github/workflows/*`, `.codex/prompts/upstream-release-sync.md`.
 
-### 20. Tool-media delivery changed
+### 20. Transcript-event handling and tool-media delivery changed
 
 - Browser tool media is no longer auto-delivered like a normal reply payload.
 - Main evidence: `648dffc1f4`.
