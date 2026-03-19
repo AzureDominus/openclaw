@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";
@@ -7,23 +7,12 @@ import {
   getProviderUsageMocks,
   getRunEmbeddedPiAgentMock,
   makeCfg,
-  requireSessionStorePath,
   withTempHome,
 } from "./reply.triggers.trigger-handling.test-harness.js";
 
 type GetReplyFromConfig = typeof import("./reply.js").getReplyFromConfig;
 
 const usageMocks = getProviderUsageMocks();
-
-async function readSessionStore(storePath: string): Promise<Record<string, unknown>> {
-  const raw = await readFile(storePath, "utf-8");
-  return JSON.parse(raw) as Record<string, unknown>;
-}
-
-function pickFirstStoreEntry<T>(store: Record<string, unknown>): T | undefined {
-  const entries = Object.values(store) as T[];
-  return entries[0];
-}
 
 function getReplyFromConfigNow(getReplyFromConfig: () => GetReplyFromConfig): GetReplyFromConfig {
   return getReplyFromConfig();
@@ -81,10 +70,9 @@ export function registerTriggerHandlingUsageSummaryCases(params: {
         {
           const cfg = makeCfg(home);
           cfg.session = { ...cfg.session, store: join(home, "usage-cycle.sessions.json") };
-          const usageStorePath = requireSessionStorePath(cfg);
           const r0 = await getReplyFromConfig(
             {
-              Body: "/usage on",
+              Body: "/usage context",
               From: "+1000",
               To: "+2000",
               Provider: "whatsapp",
@@ -94,13 +82,14 @@ export function registerTriggerHandlingUsageSummaryCases(params: {
             undefined,
             cfg,
           );
+          expect(String((Array.isArray(r0) ? r0[0]?.text : r0?.text) ?? "")).toContain("window:");
           expect(String((Array.isArray(r0) ? r0[0]?.text : r0?.text) ?? "")).toContain(
-            "Usage footer: tokens",
+            "session: input",
           );
 
           const r1 = await getReplyFromConfig(
             {
-              Body: "/usage next",
+              Body: "/usage invalid",
               From: "+1000",
               To: "+2000",
               Provider: "whatsapp",
@@ -111,43 +100,7 @@ export function registerTriggerHandlingUsageSummaryCases(params: {
             cfg,
           );
           expect(String((Array.isArray(r1) ? r1[0]?.text : r1?.text) ?? "")).toContain(
-            "Usage footer: full",
-          );
-
-          const r2 = await getReplyFromConfig(
-            {
-              Body: "/usage next",
-              From: "+1000",
-              To: "+2000",
-              Provider: "whatsapp",
-              SenderE164: "+1000",
-              CommandAuthorized: true,
-            },
-            undefined,
-            cfg,
-          );
-          expect(String((Array.isArray(r2) ? r2[0]?.text : r2?.text) ?? "")).toContain(
-            "Usage footer: off",
-          );
-
-          const r3 = await getReplyFromConfig(
-            {
-              Body: "/usage next",
-              From: "+1000",
-              To: "+2000",
-              Provider: "whatsapp",
-              SenderE164: "+1000",
-              CommandAuthorized: true,
-            },
-            undefined,
-            cfg,
-          );
-          expect(String((Array.isArray(r3) ? r3[0]?.text : r3?.text) ?? "")).toContain(
-            "Usage footer: tokens",
-          );
-          const finalStore = await readSessionStore(usageStorePath);
-          expect(pickFirstStoreEntry<{ responseUsage?: string }>(finalStore)?.responseUsage).toBe(
-            "tokens",
+            "Usage: /usage | /usage rate|cost|context",
           );
           expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
         }

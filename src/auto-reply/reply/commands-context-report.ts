@@ -21,6 +21,39 @@ function formatCharsAndTokens(chars: number): string {
   return `${formatInt(chars)} chars (~${formatInt(estimateTokensFromChars(chars))} tok)`;
 }
 
+function resolvePositiveNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : null;
+}
+
+function formatTokenUsage(totalTokens: number | null, contextTokens: number | null): string {
+  const totalLabel = totalTokens != null ? formatInt(totalTokens) : "unknown";
+  const contextLabel = contextTokens != null ? formatInt(contextTokens) : "?";
+  const pct =
+    totalTokens != null && contextTokens != null && contextTokens > 0
+      ? Math.min(999, Math.round((totalTokens / contextTokens) * 100))
+      : null;
+  return `${totalLabel}/${contextLabel} tokens${pct != null ? ` (${pct}%)` : ""}`;
+}
+
+function buildContextUsageText(params: HandleCommandsParams): string {
+  const contextTokens =
+    resolvePositiveNumber(params.contextTokens) ??
+    resolvePositiveNumber(params.sessionEntry?.contextTokens) ??
+    null;
+  const totalTokens = resolvePositiveNumber(params.sessionEntry?.totalTokens);
+  const inputTokens = resolvePositiveNumber(params.sessionEntry?.inputTokens);
+  const outputTokens = resolvePositiveNumber(params.sessionEntry?.outputTokens);
+  const stale = params.sessionEntry?.totalTokensFresh === false;
+
+  return [
+    "🧠 Context",
+    `window: ${formatTokenUsage(totalTokens, contextTokens)}${stale ? " (stale)" : ""}`,
+    `session: input ${inputTokens != null ? formatInt(inputTokens) : "unknown"} · output ${outputTokens != null ? formatInt(outputTokens) : "unknown"}`,
+  ].join("\n");
+}
+
 function parseContextArgs(commandBodyNormalized: string): string {
   if (commandBodyNormalized === "/context") {
     return "";
@@ -74,25 +107,16 @@ async function resolveContextReport(
   });
 }
 
+export async function buildContextUsageReply(params: HandleCommandsParams): Promise<ReplyPayload> {
+  return { text: buildContextUsageText(params) };
+}
+
 export async function buildContextReply(params: HandleCommandsParams): Promise<ReplyPayload> {
   const args = parseContextArgs(params.command.commandBodyNormalized);
   const sub = args.split(/\s+/).filter(Boolean)[0]?.toLowerCase() ?? "";
 
-  if (!sub || sub === "help") {
-    return {
-      text: [
-        "🧠 /context",
-        "",
-        "What counts as context (high-level), plus a breakdown mode.",
-        "",
-        "Try:",
-        "- /context list   (short breakdown)",
-        "- /context detail (per-file + per-tool + per-skill + system prompt size)",
-        "- /context json   (same, machine-readable)",
-        "",
-        "Inline shortcut = a command token inside a normal message (e.g. “hey /status”). It runs immediately (allowlisted senders only) and is stripped before the model sees the remaining text.",
-      ].join("\n"),
-    };
+  if (!sub || sub === "help" || sub === "summary" || sub === "usage" || sub === "status") {
+    return await buildContextUsageReply(params);
   }
 
   const report = await resolveContextReport(params);

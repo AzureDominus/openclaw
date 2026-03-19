@@ -110,15 +110,21 @@ import { buildCommandContext, handleCommands } from "./commands.js";
 
 // Avoid expensive workspace scans during /context tests.
 vi.mock("./commands-context-report.js", () => ({
+  buildContextUsageReply: async () => ({
+    text: "🧠 Context\nwindow: 123/200,000 tokens\nsession: input 100 · output 23",
+  }),
   buildContextReply: async (params: { command: { commandBodyNormalized: string } }) => {
     const normalized = params.command.commandBodyNormalized;
+    if (normalized === "/context") {
+      return { text: "🧠 Context\nwindow: 123/200,000 tokens\nsession: input 100 · output 23" };
+    }
     if (normalized === "/context list") {
       return { text: "Injected workspace files:\n- AGENTS.md" };
     }
     if (normalized === "/context detail") {
       return { text: "Context breakdown (detailed)\nTop tools (schema size):" };
     }
-    return { text: "/context\n- /context list\nInline shortcut" };
+    return { text: "🧠 Context\nwindow: 123/200,000 tokens\nsession: input 100 · output 23" };
   },
 }));
 
@@ -1475,7 +1481,7 @@ describe("handleCommands context", () => {
     const cases = [
       {
         commandBody: "/context",
-        expectedText: ["/context list", "Inline shortcut"],
+        expectedText: ["window: 123/200,000 tokens", "session: input 100 · output 23"],
       },
       {
         commandBody: "/context list",
@@ -1494,6 +1500,20 @@ describe("handleCommands context", () => {
         expect(result.reply?.text).toContain(expectedText);
       }
     }
+  });
+});
+
+describe("handleCommands usage", () => {
+  it("routes /usage context to the context usage summary", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/usage context", cfg);
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("window: 123/200,000 tokens");
+    expect(result.reply?.text).toContain("session: input 100 · output 23");
   });
 });
 

@@ -1,10 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Component, SelectItem, TUI } from "@mariozechner/pi-tui";
-import {
-  formatThinkingLevels,
-  normalizeUsageDisplay,
-  resolveResponseUsageMode,
-} from "../auto-reply/thinking.js";
+import { formatThinkingLevels } from "../auto-reply/thinking.js";
 import type { SessionsPatchResult } from "../gateway/protocol/index.js";
 import { formatRelativeTimestamp } from "../infra/format-time/format-relative.ts";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -384,26 +380,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         }
         break;
       case "usage": {
-        const normalized = args ? normalizeUsageDisplay(args) : undefined;
-        if (args && !normalized) {
-          chatLog.addSystem("usage: /usage <off|tokens|full>");
-          break;
-        }
-        const currentRaw = state.sessionInfo.responseUsage;
-        const current = resolveResponseUsageMode(currentRaw);
-        const next =
-          normalized ?? (current === "off" ? "tokens" : current === "tokens" ? "full" : "off");
-        try {
-          const result = await client.patchSession({
-            key: state.currentSessionKey,
-            responseUsage: next === "off" ? null : next,
-          });
-          chatLog.addSystem(`usage footer: ${next}`);
-          applySessionInfoFromPatch(result);
-          await refreshSessionInfo();
-        } catch (err) {
-          chatLog.addSystem(`usage failed: ${String(err)}`);
-        }
+        await sendMessage(raw);
         break;
       }
       case "elevated":

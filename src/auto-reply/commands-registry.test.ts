@@ -301,7 +301,7 @@ describe("commands registry args", () => {
           name: "mode",
           description,
           type: "string",
-          choices: ["off", "tokens", "full", "cost"],
+          choices: ["rate", "cost", "context"],
         },
       ],
     };
@@ -350,10 +350,9 @@ describe("commands registry args", () => {
     const menu = resolveCommandArgMenu({ command, args: undefined, cfg: {} as never });
     expect(menu?.arg.name).toBe("mode");
     expect(menu?.choices).toEqual([
-      { label: "off", value: "off" },
-      { label: "tokens", value: "tokens" },
-      { label: "full", value: "full" },
+      { label: "rate", value: "rate" },
       { label: "cost", value: "cost" },
+      { label: "context", value: "context" },
     ]);
   });
 
@@ -362,7 +361,7 @@ describe("commands registry args", () => {
 
     const menu = resolveCommandArgMenu({
       command,
-      args: { values: { mode: "tokens" } },
+      args: { values: { mode: "context" } },
       cfg: {} as never,
     });
     expect(menu).toBeNull();

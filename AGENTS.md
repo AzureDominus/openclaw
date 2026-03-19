@@ -132,7 +132,7 @@
 - Framework: Vitest with V8 coverage thresholds (70% lines/branches/functions/statements).
 - Naming: match source names with `*.test.ts`; e2e in `*.e2e.test.ts`.
 - Run `pnpm test` (or `pnpm test:coverage`) before pushing when you touch logic.
-- For targeted/local debugging, keep using the wrapper: `pnpm test -- <path-or-filter> [vitest args...]` (for example `pnpm test -- src/commands/onboard-search.test.ts -t "shows registered plugin providers"`); do not default to raw `pnpm vitest run ...` because it bypasses wrapper config/profile/pool routing.
+- For targeted/local debugging, use Vitest directly: `pnpm exec vitest run <path-or-filter> [vitest args...]` (for example `pnpm exec vitest run src/commands/onboard-search.test.ts -t "shows registered plugin providers"`).
 - `pnpm test:e2e` runs the full e2e suite (very large). For a single e2e file, run:
   `pnpm exec vitest run --config vitest.e2e.config.ts <path-to-file.e2e.test.ts>`
   to avoid unintentionally running everything.

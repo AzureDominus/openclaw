@@ -1,11 +1,11 @@
+import { listChannelDocks } from "../channels/dock.js";
+import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { COMMAND_ARG_FORMATTERS } from "./commands-args.js";
 import type {
   ChatCommandDefinition,
   CommandCategory,
   CommandScope,
 } from "./commands-registry.types.js";
-import { listChannelDocks } from "../channels/dock.js";
-import { getActivePluginRegistry } from "../plugins/runtime.js";
-import { COMMAND_ARG_FORMATTERS } from "./commands-args.js";
 import { listThinkingLevels } from "./thinking.js";
 
 type DefineChatCommandInput = {
@@ -475,15 +475,15 @@ function buildChatCommands(): ChatCommandDefinition[] {
     defineChatCommand({
       key: "usage",
       nativeName: "usage",
-      description: "Provider usage, usage footer mode, or cost summary.",
+      description: "Provider rate usage, cost summary, or session context usage.",
       textAlias: "/usage",
       category: "options",
       args: [
         {
           name: "mode",
-          description: "rate, cost, next, off, tokens, or full",
+          description: "rate, cost, or context",
           type: "string",
-          choices: ["rate", "cost", "next", "off", "tokens", "full"],
+          choices: ["rate", "cost", "context"],
         },
       ],
       argsMenu: "auto",

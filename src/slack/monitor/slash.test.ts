@@ -549,13 +549,13 @@ describe("Slack native command argument menus", () => {
   it("dispatches the command when a menu button is clicked", async () => {
     await runArgMenuAction(argMenuHandler, {
       action: {
-        value: encodeValue({ command: "usage", arg: "mode", value: "tokens", userId: "U1" }),
+        value: encodeValue({ command: "usage", arg: "mode", value: "context", userId: "U1" }),
       },
     });
 
     expect(dispatchMock).toHaveBeenCalledTimes(1);
     const call = dispatchMock.mock.calls[0]?.[0] as { ctx?: { Body?: string } };
-    expect(call.ctx?.Body).toBe("/usage tokens");
+    expect(call.ctx?.Body).toBe("/usage context");
   });
 
   it("maps /agentstatus to /status when dispatching", async () => {

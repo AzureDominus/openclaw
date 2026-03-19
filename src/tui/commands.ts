@@ -8,7 +8,7 @@ const FAST_LEVELS = ["status", "on", "off"];
 const REASONING_LEVELS = ["on", "off"];
 const ELEVATED_LEVELS = ["on", "off", "ask", "full"];
 const ACTIVATION_LEVELS = ["mention", "always"];
-const USAGE_FOOTER_LEVELS = ["off", "tokens", "full"];
+const USAGE_COMMANDS = ["rate", "cost", "context"];
 
 export type ParsedCommand = {
   name: string;
@@ -55,7 +55,7 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
   const verboseCompletions = createLevelCompletion(VERBOSE_LEVELS);
   const fastCompletions = createLevelCompletion(FAST_LEVELS);
   const reasoningCompletions = createLevelCompletion(REASONING_LEVELS);
-  const usageCompletions = createLevelCompletion(USAGE_FOOTER_LEVELS);
+  const usageCompletions = createLevelCompletion(USAGE_COMMANDS);
   const elevatedCompletions = createLevelCompletion(ELEVATED_LEVELS);
   const activationCompletions = createLevelCompletion(ACTIVATION_LEVELS);
   const commands: SlashCommand[] = [
@@ -95,7 +95,7 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
     },
     {
       name: "usage",
-      description: "Toggle per-response usage line",
+      description: "Show rate, cost, or context usage",
       getArgumentCompletions: usageCompletions,
     },
     {
@@ -152,7 +152,7 @@ export function helpText(options: SlashCommandOptions = {}): string {
     "/fast <status|on|off>",
     "/verbose <on|off>",
     "/reasoning <on|off>",
-    "/usage <off|tokens|full>",
+    "/usage <rate|cost|context>",
     "/elevated <on|off|ask|full>",
     "/elev <on|off|ask|full>",
     "/activation <mention|always>",

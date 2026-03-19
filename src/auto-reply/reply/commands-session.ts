@@ -1,5 +1,5 @@
-import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { resolveAgentDir } from "../../agents/agent-scope.js";
+import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { isRestartEnabled } from "../../config/commands.js";
 import {
@@ -30,8 +30,9 @@ import {
 import { formatTokenCount, formatUsd } from "../../utils/usage-format.js";
 import { parseActivationCommand } from "../group-activation.js";
 import { parseSendPolicyCommand } from "../send-policy.js";
-import { normalizeFastMode, normalizeUsageDisplay, resolveResponseUsageMode } from "../thinking.js";
+import { normalizeFastMode } from "../thinking.js";
 import { isDiscordSurface, isTelegramSurface, resolveChannelAccountId } from "./channel-context.js";
+import { buildContextUsageReply } from "./commands-context-report.js";
 import { handleAbortTrigger, handleStopCommand } from "./commands-session-abort.js";
 import { persistSessionEntry } from "./commands-session-store.js";
 import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
@@ -326,10 +327,9 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
 
   const rawArgs = normalized === "/usage" ? "" : normalized.slice("/usage".length).trim();
   const lowerArgs = rawArgs.toLowerCase();
-  const requested = rawArgs ? normalizeUsageDisplay(rawArgs) : undefined;
   const isCostRequest = lowerArgs.startsWith("cost");
+  const isContextRequest = lowerArgs === "context";
   const isQuotaRequest = !rawArgs || lowerArgs === "quota" || lowerArgs === "rate";
-  const isNextRequest = lowerArgs === "next";
 
   if (isCostRequest) {
     const nowMs = Date.now();
@@ -381,10 +381,12 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
     };
   }
 
-  const currentRaw =
-    params.sessionEntry?.responseUsage ??
-    (params.sessionKey ? params.sessionStore?.[params.sessionKey]?.responseUsage : undefined);
-  const current = resolveResponseUsageMode(currentRaw);
+  if (isContextRequest) {
+    return {
+      shouldContinue: false,
+      reply: await buildContextUsageReply(params),
+    };
+  }
 
   if (isQuotaRequest) {
     const providerUsage = await loadCurrentProviderUsage(params, Date.now());
@@ -397,43 +399,21 @@ export const handleUsageCommand: CommandHandler = async (params, allowTextComman
           ...(providerUsage?.quotaLines.length
             ? providerUsage.quotaLines
             : [`quota: ${providerUsage?.quotaSummary ?? "unavailable"}`]),
-          `footer: ${current}`,
         ].join("\n"),
       },
     };
   }
 
-  if (rawArgs && !requested && !isNextRequest) {
+  if (rawArgs) {
     return {
       shouldContinue: false,
-      reply: { text: "Usage: /usage | /usage rate|cost|next|off|tokens|full" },
+      reply: { text: "Usage: /usage | /usage rate|cost|context" },
     };
-  }
-
-  const next =
-    requested ??
-    (isNextRequest
-      ? current === "off"
-        ? "tokens"
-        : current === "tokens"
-          ? "full"
-          : "off"
-      : current);
-
-  if (params.sessionEntry && params.sessionStore && params.sessionKey) {
-    if (next === "off") {
-      delete params.sessionEntry.responseUsage;
-    } else {
-      params.sessionEntry.responseUsage = next;
-    }
-    await persistSessionEntry(params);
   }
 
   return {
     shouldContinue: false,
-    reply: {
-      text: `Usage footer: ${next}.`,
-    },
+    reply: { text: "Usage: /usage | /usage rate|cost|context" },
   };
 };
 

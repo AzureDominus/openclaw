@@ -15,7 +15,7 @@ function makeParams(
     },
     sessionKey: "agent:default:main",
     workspaceDir: "/tmp/workspace",
-    contextTokens: null,
+    contextTokens: 200_000,
     provider: "openai",
     model: "gpt-5",
     elevated: { allowed: false },
@@ -67,6 +67,12 @@ function makeParams(
 }
 
 describe("buildContextReply", () => {
+  it("shows session context usage by default", async () => {
+    const result = await buildContextReply(makeParams("/context", false));
+    expect(result.text).toContain("window: 123/200,000 tokens");
+    expect(result.text).toContain("session: input 100 · output 23");
+  });
+
   it("shows bootstrap truncation warning in list output when context exceeds configured limits", async () => {
     const result = await buildContextReply(makeParams("/context list", true));
     expect(result.text).toContain("Bootstrap max/total: 150,000 chars");
