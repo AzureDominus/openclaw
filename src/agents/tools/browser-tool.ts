@@ -872,10 +872,14 @@ export function createBrowserTool(opts?: {
                 type,
                 profile,
               });
+          const { path: filePath, ...rest } = result;
           return await imageResultFromFile({
             label: "browser:screenshot",
-            path: result.path,
-            details: result,
+            path: filePath,
+            extraText: `Screenshot saved to ${filePath}`,
+            details: { ...rest, filePath },
+            includeMediaDirective: false,
+            includeDetailsPath: false,
           });
         }
         case "navigate": {

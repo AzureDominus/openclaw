@@ -249,21 +249,35 @@ export async function imageResult(params: {
   extraText?: string;
   details?: Record<string, unknown>;
   imageSanitization?: ImageSanitizationLimits;
+  includeMediaDirective?: boolean;
+  includeDetailsPath?: boolean;
 }): Promise<AgentToolResult<unknown>> {
+  const includeMediaDirective = params.includeMediaDirective !== false;
+  const includeDetailsPath = params.includeDetailsPath !== false;
+  const details = { ...params.details };
+  if (!includeDetailsPath) {
+    delete details.path;
+  }
   const content: AgentToolResult<unknown>["content"] = [
     {
       type: "text",
-      text: params.extraText ?? `MEDIA:${params.path}`,
+      text: params.extraText ?? (includeMediaDirective ? `MEDIA:${params.path}` : undefined),
     },
     {
       type: "image",
       data: params.base64,
       mimeType: params.mimeType,
     },
-  ];
+  ].filter(
+    (block): block is NonNullable<AgentToolResult<unknown>["content"][number]> =>
+      !(block.type === "text" && typeof block.text !== "string"),
+  );
   const result: AgentToolResult<unknown> = {
     content,
-    details: { path: params.path, ...params.details },
+    details: {
+      ...(includeDetailsPath ? { path: params.path } : {}),
+      ...details,
+    },
   };
   return await sanitizeToolResultImages(result, params.label, params.imageSanitization);
 }
@@ -274,6 +288,8 @@ export async function imageResultFromFile(params: {
   extraText?: string;
   details?: Record<string, unknown>;
   imageSanitization?: ImageSanitizationLimits;
+  includeMediaDirective?: boolean;
+  includeDetailsPath?: boolean;
 }): Promise<AgentToolResult<unknown>> {
   const buf = await fs.readFile(params.path);
   const mimeType = (await detectMime({ buffer: buf.slice(0, 256) })) ?? "image/png";
@@ -285,6 +301,8 @@ export async function imageResultFromFile(params: {
     extraText: params.extraText,
     details: params.details,
     imageSanitization: params.imageSanitization,
+    includeMediaDirective: params.includeMediaDirective,
+    includeDetailsPath: params.includeDetailsPath,
   });
 }
 

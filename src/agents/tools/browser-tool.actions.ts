@@ -313,11 +313,14 @@ export async function executeSnapshotAction(params: {
       },
     };
     if (wantsLabels && snapshot.imagePath) {
+      const imagePath = snapshot.imagePath;
       return await imageResultFromFile({
         label: "browser:snapshot",
-        path: snapshot.imagePath,
+        path: imagePath,
         extraText: wrappedSnapshot,
-        details: safeDetails,
+        details: { ...safeDetails, filePath: imagePath },
+        includeMediaDirective: false,
+        includeDetailsPath: false,
       });
     }
     return {
@@ -396,9 +399,10 @@ export async function executeInspectAction(params: {
           kind: "snapshot",
           payload: snapshot,
         }).wrappedText;
+  const { path: screenshotPath, ...screenshotDetails } = screenshot;
   return await imageResultFromFile({
     label: "browser:inspect",
-    path: screenshot.path,
+    path: screenshotPath,
     extraText: text,
     details: {
       ok: true,
@@ -406,8 +410,11 @@ export async function executeInspectAction(params: {
       targetId: snapshot.targetId,
       url: snapshot.url,
       snapshot,
-      screenshot,
+      screenshot: { ...screenshotDetails, path: screenshotPath },
+      filePath: screenshotPath,
     },
+    includeMediaDirective: false,
+    includeDetailsPath: false,
   });
 }
 

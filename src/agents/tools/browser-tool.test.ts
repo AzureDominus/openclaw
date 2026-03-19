@@ -649,6 +649,8 @@ describe("browser tool snapshot labels", () => {
       expect.objectContaining({
         path: "/tmp/snap.png",
         extraText: expect.stringContaining("<<<EXTERNAL_UNTRUSTED_CONTENT"),
+        includeMediaDirective: false,
+        includeDetailsPath: false,
       }),
     );
     expect(result).toEqual(imageResult);
@@ -930,6 +932,32 @@ describe("browser tool inspect and state actions", () => {
       expect.objectContaining({
         targetId: "t1",
         type: "jpeg",
+      }),
+    );
+    expect(toolCommonMocks.imageResultFromFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        includeMediaDirective: false,
+        includeDetailsPath: false,
+      }),
+    );
+  });
+
+  it("screenshot returns an image result without MEDIA auto-send markers", async () => {
+    toolCommonMocks.imageResultFromFile.mockResolvedValueOnce({
+      content: [{ type: "text", text: "Screenshot saved to /tmp/test.png" }],
+      details: { filePath: "/tmp/test.png" },
+    });
+
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", { action: "screenshot" });
+
+    expect(toolCommonMocks.imageResultFromFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: "/tmp/test.png",
+        extraText: "Screenshot saved to /tmp/test.png",
+        includeMediaDirective: false,
+        includeDetailsPath: false,
+        details: expect.objectContaining({ filePath: "/tmp/test.png" }),
       }),
     );
   });
