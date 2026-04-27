@@ -11,6 +11,7 @@ import {
   collectBundledExtensionManifestErrors,
   collectBundledPluginRootRuntimeMirrorErrors,
   collectForbiddenPackContentPaths,
+  collectInventoryPackMismatchErrors,
   collectInstalledBundledPluginRuntimeDepErrors,
   bundledRuntimeDependencySentinelCandidates,
   collectRootDistBundledRuntimeMirrors,
@@ -488,20 +489,28 @@ describe("collectForbiddenPackPaths", () => {
     }
   });
 
-  it("allows legacy QA compatibility paths in the generated dist inventory", () => {
+  it("fails when the generated dist inventory references entries missing from npm pack", () => {
     const tempRoot = mkdtempSync(join(tmpdir(), "openclaw-release-inventory-"));
 
     try {
       mkdirSync(join(tempRoot, "dist"), { recursive: true });
       writeFileSync(
         join(tempRoot, PACKAGE_DIST_INVENTORY_RELATIVE_PATH),
-        JSON.stringify(["dist/extensions/qa-lab/runtime-api.js"]),
+        JSON.stringify(["dist/current.js", "dist/extensions/qa-channel/runtime-api.js"]),
         "utf8",
       );
 
       expect(
         collectForbiddenPackContentPaths([PACKAGE_DIST_INVENTORY_RELATIVE_PATH], tempRoot),
       ).toEqual([]);
+      expect(
+        collectInventoryPackMismatchErrors(
+          [PACKAGE_DIST_INVENTORY_RELATIVE_PATH, "dist/current.js"],
+          tempRoot,
+        ),
+      ).toEqual([
+        "inventory references missing npm pack entry dist/extensions/qa-channel/runtime-api.js",
+      ]);
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
     }

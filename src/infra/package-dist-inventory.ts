@@ -5,9 +5,6 @@ import { NPM_UPDATE_COMPAT_SIDECAR_PATHS } from "./npm-update-compat-sidecars.js
 export const PACKAGE_DIST_INVENTORY_RELATIVE_PATH = "dist/postinstall-inventory.json";
 const LEGACY_QA_CHANNEL_DIR = ["qa", "channel"].join("-");
 const LEGACY_QA_LAB_DIR = ["qa", "lab"].join("-");
-const LEGACY_VERIFIER_COMPAT_INVENTORY_PATHS = [
-  `dist/extensions/${LEGACY_QA_CHANNEL_DIR}/runtime-api.js`,
-];
 const OMITTED_QA_EXTENSION_PREFIXES = [
   `dist/extensions/${LEGACY_QA_CHANNEL_DIR}/`,
   `dist/extensions/${LEGACY_QA_LAB_DIR}/`,
@@ -66,9 +63,6 @@ function isPackagedDistPath(relativePath: string): boolean {
   }
   if (relativePath === "dist/plugin-sdk/.tsbuildinfo") {
     return false;
-  }
-  if (LEGACY_VERIFIER_COMPAT_INVENTORY_PATHS.includes(relativePath)) {
-    return true;
   }
   if (
     OMITTED_PRIVATE_QA_PLUGIN_SDK_PREFIXES.some((prefix) => relativePath.startsWith(prefix)) ||
@@ -219,12 +213,9 @@ export async function assertNoBundledRuntimeDepsStagingDebris(packageRoot: strin
 
 export async function writePackageDistInventory(packageRoot: string): Promise<string[]> {
   await assertNoBundledRuntimeDepsStagingDebris(packageRoot);
-  const inventory = [
-    ...new Set([
-      ...(await collectPackageDistInventory(packageRoot)),
-      ...LEGACY_VERIFIER_COMPAT_INVENTORY_PATHS,
-    ]),
-  ].toSorted((left, right) => left.localeCompare(right));
+  const inventory = [...new Set(await collectPackageDistInventory(packageRoot))].toSorted(
+    (left, right) => left.localeCompare(right),
+  );
   const inventoryPath = path.join(packageRoot, PACKAGE_DIST_INVENTORY_RELATIVE_PATH);
   await fs.mkdir(path.dirname(inventoryPath), { recursive: true });
   await fs.writeFile(inventoryPath, `${JSON.stringify(inventory, null, 2)}\n`, "utf8");
