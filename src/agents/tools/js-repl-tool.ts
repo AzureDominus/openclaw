@@ -6,7 +6,7 @@ import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { toToolDefinitions } from "../pi-tool-definition-adapter.js";
 import { sanitizeToolResultImages } from "../tool-images.js";
 import type { AnyAgentTool } from "./common.js";

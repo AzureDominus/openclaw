@@ -121,7 +121,6 @@ function normalizeReplyPayloadInternal(
 
   return normalizeReplyPayload(payload, {
     responsePrefix: opts.responsePrefix,
-    enableSlackInteractiveReplies: opts.enableSlackInteractiveReplies,
     stripStopReasonMarker: opts.stripStopReasonMarker,
     responsePrefixContext: prefixContext,
     onHeartbeatStrip: opts.onHeartbeatStrip,

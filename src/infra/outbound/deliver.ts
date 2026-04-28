@@ -1240,7 +1240,7 @@ async function deliverOutboundPayloadsCore(
           agentId: params.mirror.agentId,
           sessionKey: params.mirror.sessionKey,
           trace,
-        }).catch((err) => {
+        }).catch((err: unknown) => {
           log.warn(
             `deliverOutboundPayloads: outbound delivery trace append failed: ${String(err)}`,
           );

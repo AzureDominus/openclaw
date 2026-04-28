@@ -445,6 +445,7 @@ export async function appendOutboundDeliveryTraceToSessionTranscript(params: {
 
   await ensureSessionHeader({ sessionFile, sessionId: entry.sessionId });
 
+  const { SessionManager } = await loadPiCodingAgentModule();
   const sessionManager = SessionManager.open(sessionFile);
   sessionManager.appendCustomEntry("openclaw:outbound-delivery", {
     channel: params.trace.channel,
